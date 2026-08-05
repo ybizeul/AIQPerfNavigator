@@ -2,7 +2,6 @@ node_modules/
 src/
 public/
 docs/
-dist/
 .github/
 .mise.toml
 *.md
