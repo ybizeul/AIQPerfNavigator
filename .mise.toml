@@ -1,0 +1,52 @@
+# mise configuration for AIQ Performance Browser
+# https://mise.jdx.dev/
+
+[tools]
+# Node.js - using latest LTS or current stable
+# React 19 requires Node.js 18.17.0+ (per React docs)
+# TypeScript 6 requires Node.js 18.17.0+ (per TS docs)
+# Vite 8 requires Node.js 18.0.0+ (per Vite docs)
+node = "26.5.0"
+
+# npm is bundled with Node.js but can be pinned if needed
+# npm = "11.9.0"
+
+[tasks.install]
+description = "Install project dependencies"
+run = "npm install"
+
+[tasks.dev]
+description = "Start development server"
+run = "npm run dev"
+
+[tasks.build]
+description = "Build for production"
+run = "npm run build"
+
+[tasks.lint]
+description = "Run oxlint"
+run = "npm run lint"
+
+[tasks.preview]
+description = "Preview production build"
+run = "npm run preview"
+
+[tasks.typecheck]
+description = "Run TypeScript type checking"
+run = "npx tsc -b"
+
+[tasks.clean]
+description = "Clean build artifacts and dependencies"
+run = """
+rm -rf dist
+rm -rf node_modules
+"""
+
+[tasks.reset]
+description = "Clean and reinstall dependencies"
+depends = ["clean", "install"]
+
+[env]
+# Set NODE_ENV for different environments
+_.file = ".env"
+_.path = ".env.local"
