@@ -466,6 +466,7 @@ type CustomerGroup<T extends HAPair | SavedHAPair = HAPair | SavedHAPair> = {
   siteName: string | null
   siteId: string | null
   nagpId: string | null
+  nagpName: string | null
   pairs: T[]
 }
 
@@ -590,6 +591,7 @@ function groupPairsByCustomer<T extends HAPair | SavedHAPair>(pairs: T[]): Custo
       siteName: siteName || null,
       siteId: siteId || null,
       nagpId: nagpId || null,
+      nagpName: pairs[0]?.node1.nagp?.name ?? null,
       pairs,
     }
   })
@@ -1200,7 +1202,15 @@ function consolidateChartDataPerNode(
   return result
 }
 
-function CustomerHeader({ group }: { group: CustomerGroup }) {
+function CustomerHeader({
+  group,
+  onSaveNagp,
+  nagpAlreadySaved,
+}: {
+  group: CustomerGroup
+  onSaveNagp?: () => void
+  nagpAlreadySaved?: boolean
+}) {
   return (
     <Group gap="xs" mb="xs">
       <ThemeIcon variant="light" color="blue" size="md">
@@ -1215,9 +1225,25 @@ function CustomerHeader({ group }: { group: CustomerGroup }) {
             Site: {group.siteName || 'Unknown'}{group.siteId ? ` (${group.siteId})` : ''}
           </Text>
           {group.nagpId ? (
-            <Text size="xs" c="dimmed">
-              NAGP: {group.nagpId}
-            </Text>
+            <Group gap={4}>
+              <Text size="xs" c="dimmed">
+                NAGP: {group.nagpId}
+              </Text>
+              {onSaveNagp ? (
+                <Tooltip label={nagpAlreadySaved ? 'Already in customers list' : 'Add to customers list'}>
+                  <ActionIcon
+                    size="xs"
+                    variant="subtle"
+                    color={nagpAlreadySaved ? 'teal' : 'blue'}
+                    aria-label="Add NAGP to customers list"
+                    onClick={onSaveNagp}
+                    disabled={nagpAlreadySaved}
+                  >
+                    {nagpAlreadySaved ? <IconCheck size={12} /> : <IconDeviceFloppy size={12} />}
+                  </ActionIcon>
+                </Tooltip>
+              ) : null}
+            </Group>
           ) : null}
           <Text size="xs" c="dimmed">
             {group.pairs.length} HA pair{group.pairs.length !== 1 ? 's' : ''}
@@ -2323,7 +2349,14 @@ function App() {
                         <Stack gap="md">
                           {groupPairsByCustomer(paginatedSearchResults).map((group, groupIndex) => (
                             <div key={groupIndex}>
-                              <CustomerHeader group={group} />
+                              <CustomerHeader
+                                group={group}
+                                onSaveNagp={group.nagpId ? () => {
+                                  const name = group.nagpName || group.customerName || group.nagpId!
+                                  setNagpMappings((current) => ({ ...current, [group.nagpId!]: name }))
+                                } : undefined}
+                                nagpAlreadySaved={group.nagpId ? !!nagpMappings[group.nagpId] : false}
+                              />
                               <Stack gap="xs">
                                 {groupPairsByCluster(group.pairs).map((clusterGroup, clusterIndex) => (
                                   <ClusterBlock
