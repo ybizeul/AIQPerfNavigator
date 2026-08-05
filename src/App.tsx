@@ -89,6 +89,16 @@ const SYSTEMS_FIELDS = `
             serialNumber
             systemId
             hostName
+            ... on ONTAPSystem {
+              capacity {
+                physical {
+                  rawMarketingKiB
+                  usedKiB
+                  usablePerformanceTierKiB
+                  usedPerformanceTierKiB
+                }
+              }
+            }
           }
           capacity {
             physical {
@@ -199,6 +209,14 @@ type SystemSummary = {
     serialNumber: string
     systemId: string | null
     hostName: string | null
+    capacity?: {
+      physical: {
+        rawMarketingKiB: number | null
+        usedKiB: number | null
+        usablePerformanceTierKiB: number | null
+        usedPerformanceTierKiB: number | null
+      } | null
+    } | null
   } | null
   customer: {
     id: string | null
@@ -420,6 +438,7 @@ function groupIntoHAPairs(systems: SystemSummary[]): HAPair[] {
           },
           customer: system.customer,
           site: system.site,
+          capacity: system.partner.capacity,
         }
       }
       
