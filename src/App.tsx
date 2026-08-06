@@ -39,6 +39,7 @@ import {
 import { AreaChart } from '@mantine/charts'
 import { useDisclosure, useLocalStorage } from '@mantine/hooks'
 import {
+  IconBookmark,
   IconBuilding,
   IconChartLine,
   IconCheck,
@@ -2248,7 +2249,7 @@ function App() {
                   <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
                     Search
                   </Tabs.Tab>
-                  <Tabs.Tab value="saved" leftSection={<IconDeviceFloppy size={16} />}>
+                  <Tabs.Tab value="saved" leftSection={<IconBookmark size={16} />}>
                     Saved systems
                   </Tabs.Tab>
                   <Tabs.Tab value="performance" leftSection={<IconChartLine size={16} />}>
