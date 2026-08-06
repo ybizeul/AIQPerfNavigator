@@ -2214,9 +2214,6 @@ function App() {
               </div>
 
               <Group gap="sm">
-                <Text size="sm" c="dimmed">
-                  {refreshToken ? 'Refresh token configured' : 'No refresh token'}
-                </Text>
                 <Indicator
                   inline
                   color={refreshToken ? 'teal' : 'gray'}
