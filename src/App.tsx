@@ -2896,7 +2896,7 @@ function App() {
                                                 checked={showHeadroom}
                                                 onChange={(event) => setShowHeadroom(event.currentTarget.checked)}
                                                 size="sm"
-                                                disabled={stackLines}
+                                                disabled={stackLines && !isSinglePair}
                                               />
                                             ) : null}
                                           </Group>
