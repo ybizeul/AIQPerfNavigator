@@ -44,6 +44,7 @@ import {
   IconCheck,
   IconDeviceFloppy,
   IconKey,
+  IconPlus,
   IconRefresh,
   IconSearch,
   IconTag,
@@ -1246,19 +1247,20 @@ function CustomerHeader({
           {group.nagpId ? (
             <Group gap={4}>
               <Text size="xs" c="dimmed">
-                NAGP: {group.nagpId}
+                {group.nagpName ? `${group.nagpName} (${group.nagpId})` : group.nagpId}
               </Text>
               {onSaveNagp ? (
                 <Tooltip label={nagpAlreadySaved ? 'Already in customers list' : 'Add to customers list'}>
                   <ActionIcon
                     size="xs"
-                    variant="subtle"
-                    color={nagpAlreadySaved ? 'teal' : 'blue'}
+                    variant={nagpAlreadySaved ? 'light' : 'filled'}
+                    color={nagpAlreadySaved ? 'teal' : 'green'}
+                    radius="xl"
                     aria-label="Add NAGP to customers list"
                     onClick={onSaveNagp}
                     disabled={nagpAlreadySaved}
                   >
-                    {nagpAlreadySaved ? <IconCheck size={12} /> : <IconDeviceFloppy size={12} />}
+                    {nagpAlreadySaved ? <IconCheck size={10} /> : <IconPlus size={10} stroke={3} />}
                   </ActionIcon>
                 </Tooltip>
               ) : null}
