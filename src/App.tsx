@@ -1441,7 +1441,7 @@ function CapacityGauge({
     <Stack gap={4}>
       <Group justify="flex-end" gap="xs">
         <Text size="xs" c="dimmed">
-          {formatKiB(used)} / {formatKiB(usable)} / {formatKiB(raw)} ({usedPercent.toFixed(1)}%)
+          {formatKiB(used)} / {formatKiB(usable)} ({usedPercent.toFixed(1)}%) / {formatKiB(raw)}
         </Text>
       </Group>
       <Tooltip.Group openDelay={300} closeDelay={100}>
