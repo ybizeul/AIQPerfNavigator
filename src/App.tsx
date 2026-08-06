@@ -4,6 +4,7 @@ import '@mantine/dates/styles.css'
 import {
   ActionIcon,
   Alert,
+  Anchor,
   AppShell,
   Badge,
   Button,
@@ -43,7 +44,6 @@ import {
   IconBuilding,
   IconChartLine,
   IconCheck,
-  IconDeviceFloppy,
   IconKey,
   IconPlus,
   IconRefresh,
@@ -2242,6 +2242,48 @@ function App() {
         </AppShell.Header>
 
         <AppShell.Main>
+          {!refreshToken && (
+            <Container size="sm" py="xl">
+              <Stack gap="xl" align="center" mt="xl">
+                <Stack gap="xs" align="center">
+                  <Title order={2}>Welcome to AIQ Perf Navigator</Title>
+                  <Text c="dimmed" ta="center">
+                    You need to configure an ActiveIQ refresh token before continuing. Go to the{' '}
+                    <Anchor href="https://aiq.netapp.com/api" target="_blank" rel="noopener noreferrer">
+                      AIQ website
+                    </Anchor>
+                    {' '}to generate a token and paste it here.
+                  </Text>
+                </Stack>
+                <Paper withBorder radius="lg" p="lg" style={{ width: '100%' }}>
+                  <Stack gap="md">
+                    <PasswordInput
+                      label="Refresh token"
+                      placeholder="Paste your refresh token"
+                      description="JWE token used to obtain access tokens (4-5 segment format)"
+                      value={draftRefreshToken}
+                      onChange={(event) => setDraftRefreshToken(event.currentTarget.value)}
+                    />
+                    {draftRefreshToken && draftRefreshToken.trim().split('.').length < 4 ? (
+                      <Alert color="yellow" title="Warning">
+                        Refresh tokens should be in JWE format with 4-5 segments separated by dots. The current
+                        token has {draftRefreshToken.trim().split('.').length} segments. Make sure you copied
+                        the entire token correctly.
+                      </Alert>
+                    ) : null}
+                    <Button
+                      onClick={handleTokenSave}
+                      disabled={!draftRefreshToken.trim()}
+                      leftSection={<IconKey size={16} />}
+                    >
+                      Save token
+                    </Button>
+                  </Stack>
+                </Paper>
+              </Stack>
+            </Container>
+          )}
+          {refreshToken && (
           <Container size="xl">
             <Stack gap="lg">
               <Tabs defaultValue="search" keepMounted={false}>
@@ -3099,6 +3141,7 @@ function App() {
               </Tabs>
             </Stack>
           </Container>
+          )}
         </AppShell.Main>
       </AppShell>
     </>
