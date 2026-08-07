@@ -121,6 +121,14 @@ const SYSTEMS_FIELDS = `
             id
             name
           }
+          capacity {
+            physical {
+              rawMarketingKiB
+              usedKiB
+              usablePerformanceTierKiB
+              usedPerformanceTierKiB
+            }
+          }
         }
 `
 
