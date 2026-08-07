@@ -116,6 +116,12 @@ const SYSTEMS_FIELDS = `
             }
           }
         }
+        ... on CloudVolumeONTAP {
+          cluster {
+            id
+            name
+          }
+        }
 `
 
 const QUERY_BY_CLUSTER = `
