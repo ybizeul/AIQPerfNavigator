@@ -339,6 +339,13 @@ const BUCKET_AGGREGATION: Record<string, 'average' | 'min' | 'max'> = {
   node_latency: 'max',
 }
 
+const AUTOMATIC_TAG_PREFIX = '_'
+const AUTOMATIC_MODEL_TAGS = [
+  { modelPrefix: 'aff', tag: '_aff' },
+  { modelPrefix: 'fas', tag: '_fas' },
+  { modelPrefix: 'cdvm', tag: '_cvo' },
+] as const
+
 // Vibrant colors for tag pills
 const TAG_COLORS = [
   'blue',
@@ -362,6 +369,41 @@ function getTagColor(tag: string): string {
     hash = tag.charCodeAt(i) + ((hash << 5) - hash)
   }
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length]
+}
+
+function isAutomaticTag(tag: string) {
+  return tag.startsWith(AUTOMATIC_TAG_PREFIX)
+}
+
+function getTagLabel(tag: string) {
+  return isAutomaticTag(tag) ? tag.slice(AUTOMATIC_TAG_PREFIX.length) : tag
+}
+
+function compareTags(left: string, right: string) {
+  const labelComparison = getTagLabel(left).localeCompare(getTagLabel(right), undefined, {
+    sensitivity: 'base',
+  })
+  if (labelComparison !== 0) {
+    return labelComparison
+  }
+  return left.localeCompare(right, undefined, { sensitivity: 'base' })
+}
+
+function getAutomaticTagsForModel(modelName: string | null | undefined) {
+  const normalizedModelName = modelName?.trim().toLowerCase() ?? ''
+  const matchingTag = AUTOMATIC_MODEL_TAGS.find(({ modelPrefix }) =>
+    normalizedModelName.startsWith(modelPrefix),
+  )
+  return matchingTag ? [matchingTag.tag] : []
+}
+
+function normalizeTags(tags: string[], automaticTags: string[] = []) {
+  return Array.from(
+    new Set([
+      ...tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0 && !isAutomaticTag(tag)),
+      ...automaticTags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
+    ]),
+  ).sort(compareTags)
 }
 
 const emptySearchForm: SearchForm = {
@@ -1314,6 +1356,7 @@ function TagsEditor({
   allTags: string[]
 }) {
   const [search, setSearch] = useState('')
+  const [error, setError] = useState<string | null>(null)
   const combobox = useCombobox({
     onDropdownClose: () => {
       combobox.resetSelectedOption()
@@ -1321,90 +1364,123 @@ function TagsEditor({
     },
   })
 
+  const automaticTags = value.filter(isAutomaticTag)
+  const manualTags = value.filter((tag) => !isAutomaticTag(tag))
+  const availableTags = allTags.filter((tag) => !isAutomaticTag(tag))
+
   const handleValueSelect = (val: string) => {
     const normalized = val.trim()
-    if (normalized && !value.includes(normalized)) {
-      onChange([...value, normalized])
+    if (!normalized) {
+      setSearch('')
+      return
     }
+    if (isAutomaticTag(normalized)) {
+      setError('Tags starting with "_" are reserved for automatic model tags.')
+      return
+    }
+    if (!manualTags.includes(normalized)) {
+      onChange(normalizeTags([...manualTags, normalized], automaticTags))
+    }
+    setError(null)
     setSearch('')
   }
 
   const handleValueRemove = (val: string) => {
-    onChange(value.filter((v) => v !== val))
+    onChange(normalizeTags(manualTags.filter((tag) => tag !== val), automaticTags))
   }
 
-  const getTagColor = (tag: string) => {
-    const colors: Array<'blue' | 'cyan' | 'teal' | 'green' | 'lime' | 'yellow' | 'orange' | 'red' | 'pink' | 'grape' | 'violet' | 'indigo'> = [
-      'blue', 'cyan', 'teal', 'green', 'lime', 'yellow', 'orange', 'red', 'pink', 'grape', 'violet', 'indigo'
-    ]
-    let hash = 0
-    for (let i = 0; i < tag.length; i++) {
-      hash = tag.charCodeAt(i) + ((hash << 5) - hash)
-    }
-    return colors[Math.abs(hash) % colors.length]
-  }
-
-  const filteredOptions = allTags
-    .filter((tag) => !value.includes(tag) && tag.toLowerCase().includes(search.toLowerCase()))
+  const filteredOptions = availableTags
+    .filter(
+      (tag) =>
+        !manualTags.includes(tag) &&
+        getTagLabel(tag).toLowerCase().includes(search.toLowerCase()),
+    )
     .map((tag) => (
       <Combobox.Option value={tag} key={tag}>
-        {tag}
+        {getTagLabel(tag)}
       </Combobox.Option>
     ))
 
-  const values = value.map((item) => (
+  const manualTagPills = manualTags.map((item) => (
     <Pill 
       key={item} 
       color={getTagColor(item)}
       withRemoveButton 
       onRemove={() => handleValueRemove(item)}
     >
-      {item}
+      {getTagLabel(item)}
+    </Pill>
+  ))
+
+  const automaticTagPills = automaticTags.map((item) => (
+    <Pill key={item} color={getTagColor(item)}>
+      {getTagLabel(item)}
     </Pill>
   ))
 
   return (
-    <Combobox store={combobox} onOptionSubmit={handleValueSelect}>
-      <Combobox.Target>
-        <PillsInput
-          onClick={() => combobox.openDropdown()}
-          pointer
-        >
-          <Pill.Group>
-            {values}
-            <Combobox.EventsTarget>
-              <PillsInput.Field
-                placeholder="Add tags"
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.currentTarget.value)
-                  combobox.openDropdown()
-                  combobox.updateSelectedOptionIndex()
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && search.trim()) {
-                    event.preventDefault()
-                    handleValueSelect(search)
-                  } else if (event.key === 'Backspace' && search.length === 0 && value.length > 0) {
-                    event.preventDefault()
-                    handleValueRemove(value[value.length - 1])
-                  }
-                }}
-                onFocus={() => combobox.openDropdown()}
-                onBlur={() => combobox.closeDropdown()}
-              />
-            </Combobox.EventsTarget>
-          </Pill.Group>
-        </PillsInput>
-      </Combobox.Target>
+    <Stack gap={4}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--mantine-spacing-xs)' }}>
+        {automaticTagPills.length > 0 ? (
+          <Group gap={4} wrap="wrap" style={{ flexShrink: 0, paddingTop: 6 }}>
+            {automaticTagPills}
+          </Group>
+        ) : null}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Combobox store={combobox} onOptionSubmit={handleValueSelect}>
+            <Combobox.Target>
+              <PillsInput
+                onClick={() => combobox.openDropdown()}
+                pointer
+              >
+                <Pill.Group>
+                  {manualTagPills}
+                  <Combobox.EventsTarget>
+                    <PillsInput.Field
+                      placeholder="Add tags"
+                      value={search}
+                      onChange={(event) => {
+                        setError(null)
+                        setSearch(event.currentTarget.value)
+                        combobox.openDropdown()
+                        combobox.updateSelectedOptionIndex()
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && search.trim()) {
+                          event.preventDefault()
+                          handleValueSelect(search)
+                        } else if (
+                          event.key === 'Backspace' &&
+                          search.length === 0 &&
+                          manualTags.length > 0
+                        ) {
+                          event.preventDefault()
+                          handleValueRemove(manualTags[manualTags.length - 1])
+                        }
+                      }}
+                      onFocus={() => combobox.openDropdown()}
+                      onBlur={() => combobox.closeDropdown()}
+                    />
+                  </Combobox.EventsTarget>
+                </Pill.Group>
+              </PillsInput>
+            </Combobox.Target>
 
-      <Combobox.Dropdown>
-        <Combobox.Options>
-          {filteredOptions.length > 0 ? filteredOptions : <Combobox.Empty>No tags found</Combobox.Empty>}
-        </Combobox.Options>
-      </Combobox.Dropdown>
-    </Combobox>
+            <Combobox.Dropdown>
+              <Combobox.Options>
+                {filteredOptions.length > 0 ? filteredOptions : <Combobox.Empty>No tags found</Combobox.Empty>}
+              </Combobox.Options>
+            </Combobox.Dropdown>
+          </Combobox>
+        </div>
+      </div>
+      {error ? <Text size="xs" c="red">{error}</Text> : null}
+    </Stack>
   )
+}
+
+function getAutomaticTagsForPair(pair: Pick<HAPair, 'node1'> | Pick<SavedHAPair, 'node1'>) {
+  return getAutomaticTagsForModel(pair.node1.hardwareModel?.name)
 }
 
 function CapacityGauge({
@@ -1417,6 +1493,9 @@ function CapacityGauge({
     usedPerformanceTierKiB: number | null
   } | null
 }) {
+  const computedColorScheme = useComputedColorScheme('light', { getInitialValueInEffect: true })
+  const isDarkMode = computedColorScheme === 'dark'
+
   if (!capacity) return null
 
   const raw = capacity.rawMarketingKiB ?? 0
@@ -1435,9 +1514,10 @@ function CapacityGauge({
     if (percent >= 75) return 'orange'
     return 'green'
   }
-  const labelColor = 'light-dark(var(--mantine-color-black), var(--mantine-color-white))'
-  const usableColor = 'light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-4))'
-  const rawColor = 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))'
+
+  const labelColor = isDarkMode ? 'white' : 'dark'
+  const usableColor = isDarkMode ? 'dark.4' : 'gray.4'
+  const rawColor = isDarkMode ? 'dark.5' : 'gray.2'
 
   const formatKiB = (kib: number) => {
     const tib = kib / (1024 ** 3)
@@ -1455,7 +1535,7 @@ function CapacityGauge({
         <Progress.Root size="xl">
           <Tooltip label={`Used: ${formatKiB(used)}`} color="dark">
             <Progress.Section value={usedPercentOfRaw} color={getUsedColor(usedPercent)}>
-              <Progress.Label c="white">{formatKiB(used)}</Progress.Label>
+              <Progress.Label c={labelColor}>{formatKiB(used)}</Progress.Label>
             </Progress.Section>
           </Tooltip>
           {availablePercentOfRaw > 0 ? (
@@ -1685,6 +1765,20 @@ function App() {
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
 
+  useEffect(() => {
+    const normalizedPairs = savedPairs.map((pair) => {
+      const normalizedTags = normalizeTags(pair.tags, getAutomaticTagsForPair(pair))
+      return normalizedTags.length === pair.tags.length &&
+        normalizedTags.every((tag, index) => tag === pair.tags[index])
+        ? pair
+        : { ...pair, tags: normalizedTags }
+    })
+
+    if (normalizedPairs.some((pair, index) => pair !== savedPairs[index])) {
+      setSavedPairs(normalizedPairs)
+    }
+  }, [savedPairs, setSavedPairs])
+
   const savedPairMap = useMemo(
     () => new Map(savedPairs.map((pair) => [pair.key, pair])),
     [savedPairs],
@@ -1693,8 +1787,16 @@ function App() {
     () =>
       Array.from(
         new Set(savedPairs.flatMap((pair) => pair.tags).map((tag) => tag.trim()).filter(Boolean)),
-      ).sort((left, right) => left.localeCompare(right)),
+      ).sort(compareTags),
     [savedPairs],
+  )
+  const tagOptions = useMemo(
+    () =>
+      allTags.map((tag) => ({
+        value: tag,
+        label: getTagLabel(tag),
+      })),
+    [allTags],
   )
   const filteredSavedPairs = useMemo(() => {
     if (!savedSystemsFilter.trim()) {
@@ -1704,7 +1806,10 @@ function App() {
     const searchTerm = savedSystemsFilter.toLowerCase().trim()
     return savedPairs.filter((pair) => {
       // Check tags
-      if (pair.tags.some((tag) => tag.toLowerCase().includes(searchTerm))) {
+      if (pair.tags.some((tag) => {
+        const label = getTagLabel(tag).toLowerCase()
+        return label.includes(searchTerm) || tag.toLowerCase().includes(searchTerm)
+      })) {
         return true
       }
       // Check node1 hostname and serial
@@ -1908,12 +2013,14 @@ function App() {
 
     setSavedPairs((current) => {
       const existing = current.find((entry) => entry.key === pair.key)
+      const automaticTags = getAutomaticTagsForPair(pair)
+      const nextTags = normalizeTags(tags ?? existing?.tags ?? [], automaticTags)
       const nextPair: SavedHAPair = {
         key: pair.key,
         node1: pair.node1,
         node2,
         savedAt: existing?.savedAt ?? new Date().toISOString(),
-        tags: tags ?? existing?.tags ?? [],
+        tags: nextTags,
       }
       if (existing) {
         return current.map((entry) => (entry.key === existing.key ? nextPair : entry))
@@ -1935,13 +2042,14 @@ function App() {
   }
 
   const handleTagsChange = (key: string, tags: string[]) => {
-    const normalizedTags = Array.from(
-      new Set(tags.map((tag) => tag.trim()).filter(Boolean)),
-    ).sort((left, right) => left.localeCompare(right))
-
     setSavedPairs((current) =>
       current.map((pair) =>
-        pair.key === key ? { ...pair, tags: normalizedTags } : pair,
+        pair.key === key
+          ? {
+              ...pair,
+              tags: normalizeTags(tags, getAutomaticTagsForPair(pair)),
+            }
+          : pair,
       ),
     )
   }
@@ -2530,7 +2638,10 @@ function App() {
                                     clusterGroup={clusterGroup}
                                     renderPair={(pair) => {
                                       const isSaved = savedPairMap.has(pair.key)
-                                      const pairTags = searchResultTags.get(pair.key) ?? savedPairMap.get(pair.key)?.tags ?? []
+                                      const pairTags = normalizeTags(
+                                        searchResultTags.get(pair.key) ?? savedPairMap.get(pair.key)?.tags ?? [],
+                                        getAutomaticTagsForPair(pair),
+                                      )
                                       return (
                                         <HAPairCard
                                           pair={pair}
@@ -2710,7 +2821,7 @@ function App() {
                               mt="xs"
                               size="xs"
                               placeholder="Filter by tag"
-                              data={allTags}
+                              data={tagOptions}
                               value={performanceTagFilter}
                               onChange={(value) => {
                                 setPerformanceTagFilter(value)
@@ -2786,7 +2897,7 @@ function App() {
                                           <Group gap={2}>
                                             {pair.tags.map((tag) => (
                                               <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {tag}
+                                                {getTagLabel(tag)}
                                               </Badge>
                                             ))}
                                           </Group>
@@ -3240,7 +3351,7 @@ function App() {
                               mt="xs"
                               size="xs"
                               placeholder="Filter by tag"
-                              data={allTags}
+                              data={tagOptions}
                               value={capacityTagFilter}
                               onChange={(value) => {
                                 setCapacityTagFilter(value)
@@ -3279,7 +3390,7 @@ function App() {
                                           <Group gap={2}>
                                             {pair.tags.map((tag) => (
                                               <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {tag}
+                                                {getTagLabel(tag)}
                                               </Badge>
                                             ))}
                                           </Group>
@@ -3317,7 +3428,7 @@ function App() {
                               mt="xs"
                               size="xs"
                               placeholder="Filter by tag"
-                              data={allTags}
+                              data={tagOptions}
                               value={capacityTagFilter}
                               onChange={(value) => {
                                 setCapacityTagFilter(value)
@@ -3360,7 +3471,7 @@ function App() {
                                           <Group gap={2}>
                                             {pair.tags.map((tag) => (
                                               <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {tag}
+                                                {getTagLabel(tag)}
                                               </Badge>
                                             ))}
                                           </Group>
