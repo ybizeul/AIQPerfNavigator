@@ -287,6 +287,11 @@ type SearchResultState = {
   siteFilterWasClientSide: boolean
 }
 
+type WorkloadsSummary = {
+  totalUsedKiB: number
+  totalSizeKB: number
+}
+
 type TokenRefreshResponse = {
   access_token: string
 }
@@ -925,6 +930,92 @@ async function fetchClusterForSystem(
 
   const cluster = payload.data?.systems?.systems?.[0]?.cluster
   return cluster || null
+}
+
+const WORKLOADS_QUERY = `
+  query Workloads($systemId: String, $pageSize: Int!, $after: String) {
+    workloads(systemKey: { systemId: $systemId }, pageSize: $pageSize, after: $after) {
+      totalCount
+      cursor
+      volumes {
+        name
+        capacity {
+          usedKiB
+          sizeKB
+        }
+      }
+    }
+  }
+`
+
+const WORKLOADS_PAGE_SIZE = 100
+
+type WorkloadsVolume = {
+  name: string
+  capacity: { usedKiB: number | null; sizeKB: number | null } | null
+}
+
+type WorkloadsPageData = {
+  workloads: {
+    totalCount: number
+    cursor: string | null
+    volumes: WorkloadsVolume[] | null
+  } | null
+}
+
+async function fetchWorkloads(
+  token: string,
+  systemId: string,
+  cursor?: string,
+  accumulated: WorkloadsVolume[] = [],
+): Promise<WorkloadsSummary | null> {
+  const variables: Record<string, unknown> = { systemId, pageSize: WORKLOADS_PAGE_SIZE }
+  if (cursor) variables.after = cursor
+
+  const requestBody = { query: WORKLOADS_QUERY, variables }
+  console.log('Workloads request:', requestBody)
+
+  let response: Response
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    })
+  } catch {
+    return null
+  }
+
+  if (!response.ok) {
+    console.warn('Workloads query failed with HTTP', response.status)
+    return null
+  }
+
+  const payload = (await response.json()) as GraphQlResponse<WorkloadsPageData>
+  console.log('Workloads response:', payload)
+
+  if (payload.errors && payload.errors.length > 0) {
+    console.warn('Workloads query errors:', payload.errors)
+    return null
+  }
+
+  const page = payload.data?.workloads
+  const volumes = [...accumulated, ...(page?.volumes ?? [])]
+  const totalCount = page?.totalCount ?? 0
+  const nextCursor = page?.cursor ?? null
+
+  if (nextCursor && volumes.length < totalCount) {
+    console.log(`Workloads: fetched ${volumes.length} of ${totalCount}, fetching next page...`)
+    return fetchWorkloads(token, systemId, nextCursor, volumes)
+  }
+
+  console.log(`Workloads: fetched all ${volumes.length} volumes`)
+  const totalUsedKiB = volumes.reduce((sum, v) => sum + (v.capacity?.usedKiB ?? 0), 0)
+  const totalSizeKB = volumes.reduce((sum, v) => sum + (v.capacity?.sizeKB ?? 0), 0)
+  return { totalUsedKiB, totalSizeKB }
 }
 
 async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
@@ -1573,9 +1664,11 @@ function CapacityGauge({
 function NodeInfo({
   node,
   label,
+  workloads,
 }: {
   node: SystemSummary | null
   label: string
+  workloads?: WorkloadsSummary | null
 }) {
   if (!node) {
     return (
@@ -1609,6 +1702,29 @@ function NodeInfo({
       ) : (
         <Text size="xs" c="dimmed">No capacity data</Text>
       )}
+      {workloads ? (() => {
+        const fmt = (kib: number) => {
+          const tib = kib / 1024 ** 3
+          return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
+        }
+        // sizeKB is in KB; convert to KiB for consistent display
+        const sizeKiB = workloads.totalSizeKB * 1000 / 1024
+        const usedPercent = sizeKiB > 0 ? (workloads.totalUsedKiB / sizeKiB) * 100 : 0
+        const getUsedColor = (pct: number) => pct >= 90 ? 'red' : pct >= 75 ? 'orange' : 'green'
+        return (
+          <Stack gap={4}>
+            <Text size="xs" fw={500}>Volumes</Text>
+            <Text size="xs" c="dimmed">
+              {fmt(workloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPercent.toFixed(1)}%)
+            </Text>
+            <Progress
+              size="sm"
+              value={usedPercent}
+              color={getUsedColor(usedPercent)}
+            />
+          </Stack>
+        )
+      })() : null}
     </Stack>
   )
 }
@@ -1620,6 +1736,8 @@ function HAPairCard({
   tagsEditor,
   onRefreshCapacity,
   isRefreshing,
+  node1Workloads,
+  node2Workloads,
 }: {
   pair: HAPair | SavedHAPair
   action?: () => void
@@ -1627,6 +1745,8 @@ function HAPairCard({
   tagsEditor?: ReactNode
   onRefreshCapacity?: () => void
   isRefreshing?: boolean
+  node1Workloads?: WorkloadsSummary | null
+  node2Workloads?: WorkloadsSummary | null
 }) {
   const { node1, node2 } = pair
 
@@ -1662,11 +1782,11 @@ function HAPairCard({
         {/* Two nodes side by side */}
         <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo node={node1} label="Node 1" />
+            <NodeInfo node={node1} label="Node 1" workloads={node1Workloads} />
           </div>
           <Divider orientation="vertical" />
           <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo node={node2} label="Node 2" />
+            <NodeInfo node={node2} label="Node 2" workloads={node2Workloads} />
           </div>
         </div>
 
@@ -1771,6 +1891,7 @@ function App() {
   const [stackLines, setStackLines] = useState(true)
   const [showHeadroom, setShowHeadroom] = useState(false)
   const [refreshingCapacity, setRefreshingCapacity] = useState<Set<string>>(new Set())
+  const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
   const [capacitySelectedPairKeys, setCapacitySelectedPairKeys] = useState<Set<string>>(new Set())
   const [capacityTagFilter, setCapacityTagFilter] = useState<string[]>([])
   const [capacityCompareMode, setCapacityCompareMode] = useState(false)
@@ -2076,52 +2197,57 @@ function App() {
 
     setRefreshingCapacity((current) => new Set([...current, pairKey]))
 
+    const doFetch = async (accessToken: string) => {
+      const node1Systems = await fetchSystemsForQuery(accessToken, '', 'serialNumber', pair.node1.serialNumber)
+
+      let node2Systems: SystemSummary[] = []
+      if (pair.node2) {
+        node2Systems = await fetchSystemsForQuery(accessToken, '', 'serialNumber', pair.node2.serialNumber)
+      }
+
+      setSavedPairs((current) =>
+        current.map((p) => {
+          if (p.key !== pairKey) return p
+          const updatedNode1 = node1Systems.length > 0 ? { ...p.node1, capacity: node1Systems[0].capacity } : p.node1
+          const updatedNode2 = p.node2 && node2Systems.length > 0 ? { ...p.node2, capacity: node2Systems[0].capacity } : p.node2
+          return { ...p, node1: updatedNode1, node2: updatedNode2 }
+        }),
+      )
+
+      if (pair.node1.systemId) {
+        const w = await fetchWorkloads(accessToken, pair.node1.systemId)
+        if (w) setWorkloadsData((current) => new Map(current).set(pair.node1.systemId!, w))
+      }
+      if (pair.node2?.systemId) {
+        const w = await fetchWorkloads(accessToken, pair.node2.systemId)
+        if (w) setWorkloadsData((current) => new Map(current).set(pair.node2!.systemId!, w))
+      }
+    }
+
     try {
-      // Get a fresh access token
       let accessToken = token
       if (!accessToken) {
         accessToken = await refreshAccessToken(refreshToken)
         setToken(accessToken)
       }
 
-      // Fetch node1 capacity
-      const node1Systems = await fetchSystemsForQuery(
-        accessToken,
-        '',
-        'serialNumber',
-        pair.node1.serialNumber,
-      )
+      try {
+        await doFetch(accessToken)
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : ''
+        const isExpired =
+          msg.includes('401') ||
+          msg.toLowerCase().includes('token is expired') ||
+          msg.toLowerCase().includes('expired token')
 
-      let node2Systems: SystemSummary[] = []
-      if (pair.node2) {
-        node2Systems = await fetchSystemsForQuery(
-          accessToken,
-          '',
-          'serialNumber',
-          pair.node2.serialNumber,
-        )
+        if (isExpired) {
+          const newToken = await refreshAccessToken(refreshToken)
+          setToken(newToken)
+          await doFetch(newToken)
+        } else {
+          throw error
+        }
       }
-
-      // Update the saved pair with new capacity data
-      setSavedPairs((current) =>
-        current.map((p) => {
-          if (p.key !== pairKey) return p
-          
-          const updatedNode1 = node1Systems.length > 0
-            ? { ...p.node1, capacity: node1Systems[0].capacity }
-            : p.node1
-          
-          const updatedNode2 = p.node2 && node2Systems.length > 0
-            ? { ...p.node2, capacity: node2Systems[0].capacity }
-            : p.node2
-          
-          return {
-            ...p,
-            node1: updatedNode1,
-            node2: updatedNode2,
-          }
-        }),
-      )
     } catch (error) {
       console.error('Failed to refresh capacity:', error)
     } finally {
@@ -2323,6 +2449,8 @@ function App() {
                 pair={pair}
                 onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
                 isRefreshing={refreshingCapacity.has(pair.key)}
+                node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
+                node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
                 tagsEditor={
                   <TagsEditor
                     value={pair.tags}
@@ -2349,6 +2477,17 @@ function App() {
               },
               { rawMarketingKiB: 0, usedKiB: 0, usablePerformanceTierKiB: 0, usedPerformanceTierKiB: 0 },
             )
+            const aggWorkloads = nodes.reduce(
+              (acc, node) => {
+                const w = node.systemId ? workloadsData.get(node.systemId) : null
+                return {
+                  totalUsedKiB: acc.totalUsedKiB + (w?.totalUsedKiB ?? 0),
+                  totalSizeKB: acc.totalSizeKB + (w?.totalSizeKB ?? 0),
+                }
+              },
+              { totalUsedKiB: 0, totalSizeKB: 0 },
+            )
+            const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
             return (
               <Paper withBorder radius="lg" p="md">
                 <Stack gap="md">
@@ -2357,6 +2496,24 @@ function App() {
                     <Text size="xs" c="dimmed">{selectedPairs.length} HA pairs · {nodes.length} nodes</Text>
                   </div>
                   <CapacityGauge capacity={agg} />
+                  {hasWorkloads ? (() => {
+                    const fmt = (kib: number) => {
+                      const tib = kib / 1024 ** 3
+                      return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
+                    }
+                    const sizeKiB = aggWorkloads.totalSizeKB * 1000 / 1024
+                    const usedPct = sizeKiB > 0 ? (aggWorkloads.totalUsedKiB / sizeKiB) * 100 : 0
+                    const usedColor = usedPct >= 90 ? 'red' : usedPct >= 75 ? 'orange' : 'green'
+                    return (
+                      <Stack gap={4}>
+                        <Text fw={500} size="sm">Volumes</Text>
+                        <Text size="xs" c="dimmed">
+                          {fmt(aggWorkloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPct.toFixed(1)}%)
+                        </Text>
+                        <Progress size="sm" value={usedPct} color={usedColor} />
+                      </Stack>
+                    )
+                  })() : null}
                 </Stack>
               </Paper>
             )
@@ -2753,6 +2910,8 @@ function App() {
                                       action={() => handleRemovePair(pair.key)}
                                       onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
                                       isRefreshing={refreshingCapacity.has(pair.key)}
+                                      node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
+                                      node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
                                       tagsEditor={
                                         <TagsEditor
                                           value={pair.tags}
@@ -3522,6 +3681,8 @@ function App() {
                                 pair={pair}
                                 onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
                                 isRefreshing={refreshingCapacity.has(pair.key)}
+                                node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
+                                node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
                                 tagsEditor={
                                   <TagsEditor
                                     value={pair.tags}
@@ -3550,6 +3711,17 @@ function App() {
                               },
                               { rawMarketingKiB: 0, usedKiB: 0, usablePerformanceTierKiB: 0, usedPerformanceTierKiB: 0 },
                             )
+                            const aggWorkloads = nodes.reduce(
+                              (acc, node) => {
+                                const w = node.systemId ? workloadsData.get(node.systemId) : null
+                                return {
+                                  totalUsedKiB: acc.totalUsedKiB + (w?.totalUsedKiB ?? 0),
+                                  totalSizeKB: acc.totalSizeKB + (w?.totalSizeKB ?? 0),
+                                }
+                              },
+                              { totalUsedKiB: 0, totalSizeKB: 0 },
+                            )
+                            const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
                             return (
                               <Paper withBorder radius="lg" p="md">
                                 <Stack gap="md">
@@ -3560,6 +3732,24 @@ function App() {
                                     </Text>
                                   </div>
                                   <CapacityGauge capacity={agg} />
+                                  {hasWorkloads ? (() => {
+                                    const fmt = (kib: number) => {
+                                      const tib = kib / 1024 ** 3
+                                      return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
+                                    }
+                                    const sizeKiB = aggWorkloads.totalSizeKB * 1000 / 1024
+                                    const usedPct = sizeKiB > 0 ? (aggWorkloads.totalUsedKiB / sizeKiB) * 100 : 0
+                                    const usedColor = usedPct >= 90 ? 'red' : usedPct >= 75 ? 'orange' : 'green'
+                                    return (
+                                      <Stack gap={4}>
+                                        <Text fw={500} size="sm">Volumes</Text>
+                                        <Text size="xs" c="dimmed">
+                                          {fmt(aggWorkloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPct.toFixed(1)}%)
+                                        </Text>
+                                        <Progress size="sm" value={usedPct} color={usedColor} />
+                                      </Stack>
+                                    )
+                                  })() : null}
                                 </Stack>
                               </Paper>
                             )
