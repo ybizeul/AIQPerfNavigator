@@ -35,7 +35,9 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  useComputedColorScheme,
   useCombobox,
+  useMantineColorScheme,
 } from '@mantine/core'
 import { AreaChart } from '@mantine/charts'
 import { useDisclosure, useLocalStorage } from '@mantine/hooks'
@@ -46,9 +48,11 @@ import {
   IconCheck,
   IconDatabase,
   IconKey,
+  IconMoon,
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconSun,
   IconTag,
   IconTrash,
   IconX,
@@ -1431,6 +1435,9 @@ function CapacityGauge({
     if (percent >= 75) return 'orange'
     return 'green'
   }
+  const labelColor = 'light-dark(var(--mantine-color-black), var(--mantine-color-white))'
+  const usableColor = 'light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-4))'
+  const rawColor = 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))'
 
   const formatKiB = (kib: number) => {
     const tib = kib / (1024 ** 3)
@@ -1448,19 +1455,19 @@ function CapacityGauge({
         <Progress.Root size="xl">
           <Tooltip label={`Used: ${formatKiB(used)}`} color="dark">
             <Progress.Section value={usedPercentOfRaw} color={getUsedColor(usedPercent)}>
-              <Progress.Label>{formatKiB(used)}</Progress.Label>
+              <Progress.Label c="white">{formatKiB(used)}</Progress.Label>
             </Progress.Section>
           </Tooltip>
           {availablePercentOfRaw > 0 ? (
             <Tooltip label={`Usable: ${formatKiB(usable)}`} color="dark">
-              <Progress.Section value={availablePercentOfRaw} color="gray">
-                <Progress.Label>{formatKiB(usable - used)}</Progress.Label>
+              <Progress.Section value={availablePercentOfRaw} color={usableColor}>
+                <Progress.Label c={labelColor}>{formatKiB(usable - used)}</Progress.Label>
               </Progress.Section>
             </Tooltip>
           ) : null}
           {unusablePercentOfRaw > 0 ? (
             <Tooltip label={`Marketing: ${formatKiB(raw)}`} color="dark">
-              <Progress.Section value={unusablePercentOfRaw} color="dark.2" />
+              <Progress.Section value={unusablePercentOfRaw} color={rawColor} />
             </Tooltip>
           ) : null}
         </Progress.Root>
@@ -1625,6 +1632,9 @@ function HAPairCard({
 }
 
 function App() {
+  const { setColorScheme } = useMantineColorScheme()
+  const computedColorScheme = useComputedColorScheme('light', { getInitialValueInEffect: true })
+  const isDarkMode = computedColorScheme === 'dark'
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
   const [token, setToken] = useLocalStorage({
@@ -2298,6 +2308,14 @@ function App() {
               </div>
 
               <Group gap="sm">
+                <ActionIcon
+                  variant="default"
+                  size="lg"
+                  aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
+                  onClick={() => setColorScheme(isDarkMode ? 'light' : 'dark')}
+                >
+                  {isDarkMode ? <IconSun size={18} /> : <IconMoon size={18} />}
+                </ActionIcon>
                 <Indicator
                   inline
                   color={refreshToken ? 'teal' : 'gray'}
