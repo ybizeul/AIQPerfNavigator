@@ -1372,6 +1372,10 @@ function consolidateChartDataPerNode(
     result.push(point)
   }
 
+  // Map insertion order doesn't guarantee chronological order when nodes have
+  // mismatched timestamp sets, so re-sort explicitly before returning.
+  result.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+
   return result
 }
 
@@ -2103,6 +2107,8 @@ function App() {
               : 'Token refresh failed.',
           )
         }
+      } else if (errorMessage.includes('429')) {
+        setSearchError('Rate exceeded, please wait 5 minutes.')
       } else {
         setSearchError(errorMessage)
       }
