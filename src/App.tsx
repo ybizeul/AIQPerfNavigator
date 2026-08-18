@@ -3317,6 +3317,7 @@ function App() {
                                                     h={220}
                                                     data={node1Data}
                                                     dataKey="timestamp"
+                                                    type={graph.name === 'node_protocol_iops' ? 'stacked' : undefined}
                                                     series={buildSeries(node1Data)}
                                                     curveType="monotone"
                                                     strokeWidth={1}
@@ -3341,6 +3342,7 @@ function App() {
                                                       h={220}
                                                       data={node2Data}
                                                       dataKey="timestamp"
+                                                      type={graph.name === 'node_protocol_iops' ? 'stacked' : undefined}
                                                       series={buildSeries(node2Data)}
                                                       curveType="monotone"
                                                       strokeWidth={1}
@@ -3422,7 +3424,7 @@ function App() {
                                                 dataKey="timestamp"
                                                 strokeWidth={1}
                                                 withGradient={false}
-                                                type={stackLines && ['node_avg_iops', 'node_protocol_iops', 'node_network_throughput'].includes(graph.name) ? 'stacked' : undefined}
+                                                type={graph.name === 'node_protocol_iops' || (stackLines && ['node_avg_iops', 'node_network_throughput'].includes(graph.name)) ? 'stacked' : undefined}
                                                 series={(() => {
                                                   const keys = Object.keys(chartData[0])
                                                     .filter((key) => key !== 'timestamp' && key !== '__epochMs')
