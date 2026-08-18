@@ -313,6 +313,8 @@ type PerformanceResponse = {
 
 type ChartDataPoint = {
   timestamp: string
+  // Hidden sort key (epoch ms); excluded from chart series wherever data keys are enumerated.
+  __epochMs: number
   [key: string]: string | number
 }
 
@@ -1282,6 +1284,9 @@ function transformPerformanceData(
           hour: '2-digit',
           minute: '2-digit',
         }),
+        // Hidden sort key: avoids relying on Date.parse of the locale-formatted
+        // label, which is browser-dependent and ambiguous across year boundaries.
+        __epochMs: hourMs,
       }
       for (const [key, values] of Object.entries(keyValues)) {
         if (bucketAggregation === 'min') {
@@ -1302,7 +1307,7 @@ const CHART_MAX_POINTS = 500
 function lttbDownsample(data: ChartDataPoint[], threshold: number): ChartDataPoint[] {
   if (data.length <= threshold) return data
   const rep = (p: ChartDataPoint) => {
-    const vals = Object.entries(p).filter(([k, v]) => k !== 'timestamp' && typeof v === 'number').map(([, v]) => v as number)
+    const vals = Object.entries(p).filter(([k, v]) => k !== 'timestamp' && k !== '__epochMs' && typeof v === 'number').map(([, v]) => v as number)
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0
   }
   const sampled: ChartDataPoint[] = [data[0]]
@@ -1334,9 +1339,9 @@ function smoothChartData(data: ChartDataPoint[]): ChartDataPoint[] {
   if (data.length <= w) return data
   const half = Math.floor(w / 2)
   return data.map((point, i) => {
-    const smoothed: ChartDataPoint = { timestamp: point.timestamp }
+    const smoothed: ChartDataPoint = { timestamp: point.timestamp, __epochMs: point.__epochMs }
     for (const key of Object.keys(point)) {
-      if (key === 'timestamp') continue
+      if (key === 'timestamp' || key === '__epochMs') continue
       const win: number[] = []
       for (let j = Math.max(0, i - half); j <= Math.min(data.length - 1, i + half); j++) {
         const v = data[j][key]; if (typeof v === 'number') win.push(v)
@@ -1352,29 +1357,29 @@ function consolidateChartDataPerNode(
 ): ChartDataPoint[] {
   if (datasets.length === 0) return []
 
-  const timestampMap = new Map<string, Record<string, number>>()
+  const timestampMap = new Map<string, { epochMs: number; values: Record<string, number> }>()
 
   for (const { data, nodeLabel } of datasets) {
     for (const point of data) {
-      const entry = timestampMap.get(point.timestamp) ?? {}
+      const entry = timestampMap.get(point.timestamp) ?? { epochMs: point.__epochMs, values: {} }
       if (!timestampMap.has(point.timestamp)) timestampMap.set(point.timestamp, entry)
       for (const [key, value] of Object.entries(point)) {
-        if (key === 'timestamp' || typeof value !== 'number') continue
+        if (key === 'timestamp' || key === '__epochMs' || typeof value !== 'number') continue
         const labeledKey = `${nodeLabel} – ${key}`
-        entry[labeledKey] = value
+        entry.values[labeledKey] = value
       }
     }
   }
 
   const result: ChartDataPoint[] = []
-  for (const [timestamp, keyValues] of timestampMap) {
-    const point: ChartDataPoint = { timestamp, ...keyValues }
-    result.push(point)
+  for (const [timestamp, { epochMs, values }] of timestampMap) {
+    result.push({ timestamp, __epochMs: epochMs, ...values })
   }
 
   // Map insertion order doesn't guarantee chronological order when nodes have
-  // mismatched timestamp sets, so re-sort explicitly before returning.
-  result.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
+  // mismatched timestamp sets, so sort explicitly by the underlying epoch
+  // rather than parsing the display label (unreliable across browsers/years).
+  result.sort((a, b) => a.__epochMs - b.__epochMs)
 
   return result
 }
@@ -3208,9 +3213,9 @@ function App() {
                                     // Transform data keys to human-readable labels
                                     const transformDataKeys = (data: ChartDataPoint[]): ChartDataPoint[] => {
                                       return data.map((point) => {
-                                        const transformed: ChartDataPoint = { timestamp: point.timestamp }
+                                        const transformed: ChartDataPoint = { timestamp: point.timestamp, __epochMs: point.__epochMs }
                                         for (const [key, value] of Object.entries(point)) {
-                                          if (key === 'timestamp') continue
+                                          if (key === 'timestamp' || key === '__epochMs') continue
                                           
                                           const separatorIndex = key.indexOf(' – ')
                                           let newKey = key
@@ -3233,7 +3238,7 @@ function App() {
                                     }
 
                                     const buildSeries = (data: ChartDataPoint[]) => {
-                                      const keys = Object.keys(data[0]).filter((key) => key !== 'timestamp')
+                                      const keys = Object.keys(data[0]).filter((key) => key !== 'timestamp' && key !== '__epochMs')
                                       
                                       // Filter out Headroom when showHeadroom is false for CPU graph
                                       const filteredKeys = keys.filter((key) => {
@@ -3365,7 +3370,7 @@ function App() {
                                                 withGradient={false}
                                                 series={(() => {
                                                   const keys = Object.keys(chartData[0])
-                                                    .filter((key) => key !== 'timestamp')
+                                                    .filter((key) => key !== 'timestamp' && key !== '__epochMs')
                                                     .filter((key) => {
                                                       // When stacking, only show CPU Utilization metrics
                                                       if (!key.includes('CPU Utilization')) {
@@ -3420,7 +3425,7 @@ function App() {
                                                 type={stackLines && ['node_avg_iops', 'node_protocol_iops', 'node_network_throughput'].includes(graph.name) ? 'stacked' : undefined}
                                                 series={(() => {
                                                   const keys = Object.keys(chartData[0])
-                                                    .filter((key) => key !== 'timestamp')
+                                                    .filter((key) => key !== 'timestamp' && key !== '__epochMs')
                                                     .filter((key) => {
                                                       // Filter out Headroom when showHeadroom is false for CPU graph
                                                       if (graph.name === 'node_headroom_cpu_utilization' && !showHeadroom && key.includes('Headroom')) {
