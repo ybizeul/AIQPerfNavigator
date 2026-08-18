@@ -3318,7 +3318,7 @@ function App() {
                                                     data={node1Data}
                                                     dataKey="timestamp"
                                                     series={buildSeries(node1Data)}
-                                                    curveType="natural"
+                                                    curveType="monotone"
                                                     strokeWidth={1}
                                                     withGradient={false}
                                                     withLegend
@@ -3342,7 +3342,7 @@ function App() {
                                                       data={node2Data}
                                                       dataKey="timestamp"
                                                       series={buildSeries(node2Data)}
-                                                      curveType="natural"
+                                                      curveType="monotone"
                                                       strokeWidth={1}
                                                       withGradient={false}
                                                       withLegend
@@ -3410,7 +3410,7 @@ function App() {
                                                     color: CHART_COLORS[i % CHART_COLORS.length],
                                                   }))
                                                 })()}
-                                                curveType="natural"
+                                                curveType="monotone"
                                                 withLegend
                                                 withTooltip
                                                 withDots={false}
@@ -3474,7 +3474,7 @@ function App() {
                                                     color: CHART_COLORS[i % CHART_COLORS.length],
                                                   }))
                                                 })()}
-                                                curveType="natural"
+                                                curveType="monotone"
                                                 withLegend
                                                 withTooltip
                                                 withDots={false}
