@@ -1932,9 +1932,6 @@ function App() {
   const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
   const [capacitySelectedPairKeys, setCapacitySelectedPairKeys] = useState<Set<string>>(new Set())
   const [capacityTagFilter, setCapacityTagFilter] = useState<string[]>([])
-  const [capacityCompareMode, setCapacityCompareMode] = useState(false)
-  const [capacityLeftDate, setCapacityLeftDate] = useState<Date | null>(null)
-  const [capacityRightDate, setCapacityRightDate] = useState<Date | null>(null)
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
 
@@ -2462,107 +2459,6 @@ function App() {
       }
     }
   }, [dateRange, customStartDate, customEndDate]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const renderCapacitySide = (
-    date: Date | null,
-    onDateChange: (d: Date | null) => void,
-    selectedKeys: Set<string>,
-  ) => (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 'var(--mantine-spacing-sm)', height: '100%' }}>
-      <DateTimePicker
-        placeholder="Select date"
-        value={date}
-        onChange={(v) => onDateChange(v ? new Date(v) : null)}
-        clearable
-        maxDate={new Date()}
-        style={{ flexShrink: 0 }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-          {selectedKeys.size === 0 ? (
-            <Paper withBorder radius="lg" p="xl">
-              <Text c="dimmed" ta="center">Select an HA pair to view capacity details</Text>
-            </Paper>
-          ) : selectedKeys.size === 1 ? (() => {
-            const [pairKey] = selectedKeys
-            const pair = savedPairMap.get(pairKey)
-            if (!pair) return null
-            return (
-              <HAPairCard
-                pair={pair}
-                onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
-                isRefreshing={refreshingCapacity.has(pair.key)}
-                node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
-                node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
-                tagsEditor={
-                  <TagsEditor
-                    value={pair.tags}
-                    onChange={(value) => handleTagsChange(pair.key, value)}
-                    allTags={allTags}
-                  />
-                }
-              />
-            )
-          })() : (() => {
-            const selectedPairs = Array.from(selectedKeys)
-              .map((k) => savedPairMap.get(k))
-              .filter((p): p is SavedHAPair => p !== undefined)
-            const nodes = selectedPairs.flatMap((p) => p.node2 ? [p.node1, p.node2] : [p.node1])
-            const agg = nodes.reduce(
-              (acc, node) => {
-                const phys = node.capacity?.physical
-                return {
-                  rawMarketingKiB: acc.rawMarketingKiB + (phys?.rawMarketingKiB ?? 0),
-                  usedKiB: acc.usedKiB + (phys?.usedKiB ?? 0),
-                  usablePerformanceTierKiB: acc.usablePerformanceTierKiB + (phys?.usablePerformanceTierKiB ?? 0),
-                  usedPerformanceTierKiB: acc.usedPerformanceTierKiB + (phys?.usedPerformanceTierKiB ?? 0),
-                }
-              },
-              { rawMarketingKiB: 0, usedKiB: 0, usablePerformanceTierKiB: 0, usedPerformanceTierKiB: 0 },
-            )
-            const aggWorkloads = nodes.reduce(
-              (acc, node) => {
-                const w = node.systemId ? workloadsData.get(node.systemId) : null
-                return {
-                  totalUsedKiB: acc.totalUsedKiB + (w?.totalUsedKiB ?? 0),
-                  totalSizeKB: acc.totalSizeKB + (w?.totalSizeKB ?? 0),
-                }
-              },
-              { totalUsedKiB: 0, totalSizeKB: 0 },
-            )
-            const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
-            return (
-              <Paper withBorder radius="lg" p="md">
-                <Stack gap="md">
-                  <div>
-                    <Text fw={500}>Aggregated Capacity</Text>
-                    <Text size="xs" c="dimmed">{selectedPairs.length} HA pairs · {nodes.length} nodes</Text>
-                  </div>
-                  <CapacityGauge capacity={agg} />
-                  {hasWorkloads ? (() => {
-                    const fmt = (kib: number) => {
-                      const tib = kib / 1024 ** 3
-                      return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
-                    }
-                    const sizeKiB = aggWorkloads.totalSizeKB * 1000 / 1024
-                    const usedPct = sizeKiB > 0 ? (aggWorkloads.totalUsedKiB / sizeKiB) * 100 : 0
-                    const usedColor = usedPct >= 90 ? 'red' : usedPct >= 75 ? 'orange' : 'green'
-                    return (
-                      <Stack gap={4}>
-                        <Text fw={500} size="sm">Volumes</Text>
-                        <Text size="xs" c="dimmed">
-                          {fmt(aggWorkloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPct.toFixed(1)}%)
-                        </Text>
-                        <Progress size="sm" value={usedPct} color={usedColor} />
-                      </Stack>
-                    )
-                  })() : null}
-                </Stack>
-              </Paper>
-            )
-          })()}
-      </div>
-    </div>
-  )
 
   return (
     <>
@@ -3559,13 +3455,6 @@ function App() {
                           View capacity metrics for saved systems.
                         </Text>
                       </div>
-                      <Switch
-                        label="Compare"
-                        checked={capacityCompareMode}
-                        onChange={(e) => {
-                          setCapacityCompareMode(e.currentTarget.checked)
-                        }}
-                      />
                     </Group>
 
                     {savedPairs.length === 0 ? (
@@ -3574,83 +3463,6 @@ function App() {
                           Save HA pairs from the search tab to view their capacity metrics.
                         </Text>
                       </Paper>
-                    ) : capacityCompareMode ? (
-                      <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', height: 'calc(100vh - 220px)' }}>
-                        <Paper withBorder radius="lg" style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
-                          <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-                            <Text fw={500} size="sm">HA Pairs</Text>
-                            <Text size="xs" c="dimmed">
-                              {capacityVisiblePairs.length}{capacityTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
-                            </Text>
-                            <MultiSelect
-                              mt="xs"
-                              size="xs"
-                              placeholder="Filter by tag"
-                              data={tagOptions}
-                              value={capacityTagFilter}
-                              onChange={(value) => {
-                                setCapacityTagFilter(value)
-                                setCapacitySelectedPairKeys(new Set())
-                              }}
-                              clearable
-                              searchable
-                              nothingFoundMessage="No tags"
-                              leftSection={<IconTag size={12} />}
-                            />
-                          </div>
-                          <ScrollArea style={{ flex: 1 }}>
-                            {groupPairsByCluster(capacityVisiblePairs).map((group, groupIndex) => (
-                              <div key={groupIndex}>
-                                <div style={{
-                                  padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
-                                  backgroundColor: 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-6))',
-                                  borderBottom: '1px solid var(--mantine-color-default-border)',
-                                  position: 'sticky',
-                                  top: 0,
-                                  zIndex: 1,
-                                }}>
-                                  <Text size="xs" fw={600}>{group.clusterName || 'Unknown'}</Text>
-                                </div>
-                                {group.pairs.map((pair) => (
-                                  <NavLink
-                                    key={pair.key}
-                                    label={pairLabel(pair)}
-                                    description={
-                                      <Stack gap={2}>
-                                        <span>{pairSerialLabel(pair)}</span>
-                                        {pair.node1.hardwareModel?.name ? (
-                                          <Text size="xs" c="dimmed">{pair.node1.hardwareModel.name}</Text>
-                                        ) : null}
-                                        {pair.tags.length > 0 ? (
-                                          <Group gap={2}>
-                                            {pair.tags.map((tag) => (
-                                              <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {getTagLabel(tag)}
-                                              </Badge>
-                                            ))}
-                                          </Group>
-                                        ) : null}
-                                      </Stack>
-                                    }
-                                    active={capacitySelectedPairKeys.has(pair.key)}
-                                    onClick={() => setCapacitySelectedPairKeys((curr) => {
-                                      const next = new Set(curr)
-                                      if (next.has(pair.key)) next.delete(pair.key)
-                                      else next.add(pair.key)
-                                      return next
-                                    })}
-                                  />
-                                ))}
-                              </div>
-                            ))}
-                          </ScrollArea>
-                        </Paper>
-                        <div style={{ flex: 1, minWidth: 0, display: 'flex', gap: 'var(--mantine-spacing-md)', height: '100%' }}>
-                          {renderCapacitySide(capacityLeftDate, setCapacityLeftDate, capacitySelectedPairKeys)}
-                          <Divider orientation="vertical" />
-                          {renderCapacitySide(capacityRightDate, setCapacityRightDate, capacitySelectedPairKeys)}
-                        </div>
-                      </div>
                     ) : (
                       <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start', height: 'calc(100vh - 200px)' }}>
                         <Paper withBorder radius="lg" style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
