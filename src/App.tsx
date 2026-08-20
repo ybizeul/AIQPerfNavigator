@@ -541,6 +541,24 @@ function groupIntoHAPairs(systems: SystemSummary[]): HAPair[] {
   return pairs
 }
 
+function addClusterNameToNodes(
+  node1: SystemSummary,
+  node2: SystemSummary | null,
+): [SystemSummary, SystemSummary | null] {
+  const clusterName = node1.cluster?.name ?? node2?.cluster?.name
+  if (!clusterName) return [node1, node2]
+
+  const addClusterName = (node: SystemSummary) => ({
+    ...node,
+    cluster: {
+      ...(node.cluster ?? { id: null }),
+      name: node.cluster?.name ?? clusterName,
+    },
+  })
+
+  return [addClusterName(node1), node2 ? addClusterName(node2) : null]
+}
+
 function pairLabel(pair: HAPair | SavedHAPair) {
   const n1 = pair.node1.hostName || pair.node1.serialNumber
   const n2 = pair.node2 ? pair.node2.hostName || pair.node2.serialNumber : '?'
@@ -2168,14 +2186,16 @@ function App() {
       }
     }
 
+    const [node1, enrichedNode2] = addClusterNameToNodes(pair.node1, node2)
+
     setSavedPairs((current) => {
       const existing = current.find((entry) => entry.key === pair.key)
       const automaticTags = getAutomaticTagsForPair(pair)
       const nextTags = normalizeTags(tags ?? existing?.tags ?? [], automaticTags)
       const nextPair: SavedHAPair = {
         key: pair.key,
-        node1: pair.node1,
-        node2,
+        node1,
+        node2: enrichedNode2,
         savedAt: existing?.savedAt ?? new Date().toISOString(),
         tags: nextTags,
       }
