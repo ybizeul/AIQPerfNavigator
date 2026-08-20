@@ -88,6 +88,7 @@ const SYSTEMS_FIELDS = `
           cmatId
         }
         ... on ONTAPSystem {
+          isMetroCluster
           cluster {
             id
             name
@@ -97,6 +98,7 @@ const SYSTEMS_FIELDS = `
             systemId
             hostName
             ... on ONTAPSystem {
+              isMetroCluster
               capacity {
                 physical {
                   rawMarketingKiB
@@ -215,6 +217,7 @@ type SystemSummary = {
   hostName: string | null
   platformType: string | null
   customerGroup: string | null
+  isMetroCluster?: boolean | null
   hardwareModel: {
     name: string | null
   } | null
@@ -410,7 +413,7 @@ function compareTags(left: string, right: string) {
   return left.localeCompare(right, undefined, { sensitivity: 'base' })
 }
 
-function getAutomaticTagsForModel(modelName: string | null | undefined) {
+function getAutomaticTagsForModel(modelName: string | null | undefined): string[] {
   const normalizedModelName = modelName?.trim().toLowerCase() ?? ''
   const matchingTag = AUTOMATIC_MODEL_TAGS.find(({ modelPrefix }) =>
     normalizedModelName.startsWith(modelPrefix),
@@ -1594,7 +1597,11 @@ function TagsEditor({
 }
 
 function getAutomaticTagsForPair(pair: Pick<HAPair, 'node1'> | Pick<SavedHAPair, 'node1'>) {
-  return getAutomaticTagsForModel(pair.node1.hardwareModel?.name)
+  const tags = getAutomaticTagsForModel(pair.node1.hardwareModel?.name)
+  if (pair.node1.isMetroCluster) {
+    tags.push('_metrocluster')
+  }
+  return tags
 }
 
 function CapacityGauge({
@@ -1898,6 +1905,10 @@ function App() {
   const [searchPage, setSearchPage] = useState(1)
   const [showSavedOnly, setShowSavedOnly] = useState(false)
   const [stackLines, setStackLines] = useState(true)
+  const [stackedGraphs, setStackedGraphs] = useState<Record<string, boolean>>({
+    node_protocol_iops: true,
+    node_network_throughput: true,
+  })
   const [showHeadroom, setShowHeadroom] = useState(false)
   const [refreshingCapacity, setRefreshingCapacity] = useState<Set<string>>(new Set())
   const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
@@ -3171,6 +3182,8 @@ function App() {
 
                                   {PERFORMANCE_GRAPHS.map((graph) => {
                                     const isSinglePair = selectedPairKeys.size === 1
+                                    const supportsStacking = ['node_protocol_iops', 'node_network_throughput'].includes(graph.name)
+                                    const isGraphStacked = stackedGraphs[graph.name] ?? false
                                     const [singlePairKey] = selectedPairKeys
                                     const singlePair = isSinglePair ? savedPairMap.get(singlePairKey) : null
 
@@ -3294,16 +3307,32 @@ function App() {
                                                 {graph.description}
                                               </Text>
                                             </div>
-                                            {graph.name === 'node_headroom_cpu_utilization' ? (
-                                              <Switch
-                                                label="Show headroom"
-                                                description="Show Headroom metric"
-                                                checked={showHeadroom}
-                                                onChange={(event) => setShowHeadroom(event.currentTarget.checked)}
-                                                size="sm"
-                                                disabled={stackLines && !isSinglePair}
-                                              />
-                                            ) : null}
+                                            <Group gap="md">
+                                              {supportsStacking ? (
+                                                <Switch
+                                                  label="Stack"
+                                                  checked={isGraphStacked}
+                                                  onChange={(event) => {
+                                                    const stacked = event.currentTarget.checked
+                                                    setStackedGraphs((current) => ({
+                                                      ...current,
+                                                      [graph.name]: stacked,
+                                                    }))
+                                                  }}
+                                                  size="sm"
+                                                />
+                                              ) : null}
+                                              {graph.name === 'node_headroom_cpu_utilization' ? (
+                                                <Switch
+                                                  label="Show headroom"
+                                                  description="Show Headroom metric"
+                                                  checked={showHeadroom}
+                                                  onChange={(event) => setShowHeadroom(event.currentTarget.checked)}
+                                                  size="sm"
+                                                  disabled={stackLines && !isSinglePair}
+                                                />
+                                              ) : null}
+                                            </Group>
                                           </Group>
 
                                           {isSinglePair ? (
@@ -3317,7 +3346,7 @@ function App() {
                                                     h={220}
                                                     data={node1Data}
                                                     dataKey="timestamp"
-                                                    type={['node_protocol_iops', 'node_network_throughput'].includes(graph.name) ? 'stacked' : undefined}
+                                                    type={isGraphStacked ? 'stacked' : undefined}
                                                     series={buildSeries(node1Data)}
                                                     curveType="monotone"
                                                     strokeWidth={1}
@@ -3342,7 +3371,7 @@ function App() {
                                                       h={220}
                                                       data={node2Data}
                                                       dataKey="timestamp"
-                                                      type={['node_protocol_iops', 'node_network_throughput'].includes(graph.name) ? 'stacked' : undefined}
+                                                      type={isGraphStacked ? 'stacked' : undefined}
                                                       series={buildSeries(node2Data)}
                                                       curveType="monotone"
                                                       strokeWidth={1}
@@ -3424,7 +3453,7 @@ function App() {
                                                 dataKey="timestamp"
                                                 strokeWidth={1}
                                                 withGradient={false}
-                                                type={['node_protocol_iops', 'node_network_throughput'].includes(graph.name) || (stackLines && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
+                                                type={isGraphStacked || (stackLines && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
                                                 series={(() => {
                                                   const keys = Object.keys(chartData[0])
                                                     .filter((key) => key !== 'timestamp' && key !== '__epochMs')
