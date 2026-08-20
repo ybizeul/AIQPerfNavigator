@@ -2,8 +2,8 @@ directive @defer(label: String, if: Boolean! = true) on FRAGMENT_SPREAD | INLINE
 
 """Fields for creating a new customer success plan."""
 input AccountPlanCreateInput {
-  """Site CMAT ID (Customer Master Account Table) for the new plan."""
-  cmatId: String!
+  """NAGP (NetApp Global Parent Account) id for the new plan."""
+  nagpId: String!
 
   """Display name of the new success plan."""
   name: String!
@@ -17,9 +17,6 @@ input AccountPlanCreateInput {
   Unique identifier linking to the originating Adaptive Intake Form (AIF) in the presales workflow, if applicable.
   """
   linkedAifId: String
-
-  """Email address of the Technical Account Manager assigned to the plan."""
-  tamOwnerEmail: String!
 
   """Secondary plan title entered by the TAM."""
   title: String
@@ -48,12 +45,7 @@ input AccountPlanCreateInput {
   successMetrics: [SuccessMetric!]
 
   """Initial health indicator for the plan (Green / Yellow / Red)."""
-  health: SuccessPlanHealth
-
-  """
-  Timestamp of the last update to the plan. Defaults to the time of creation when omitted.
-  """
-  lastUpdated: DateTime
+  health: SuccessPlanHealth!
 
   """Customer contacts with oversight of the plan."""
   keyStakeholders: [SuccessPlanStakeholderInput!]
@@ -63,6 +55,9 @@ input AccountPlanCreateInput {
 
   """TAM's internal working notes on the plan."""
   tamNotes: String
+
+  """CSP scope for this plan."""
+  scope: SuccessPlanScopeInput
 }
 
 """Fields available to update on an existing success plan."""
@@ -84,6 +79,9 @@ input AccountPlanUpdateInput {
 
   """TAM internal working notes on the plan."""
   tamNotes: String
+
+  """CSP scope for this plan."""
+  scope: SuccessPlanScopeInput
 
   """
   Free-text summary of the customer's stated challenges and business goals (Customer_Challenges_Goals__c).
@@ -1392,6 +1390,23 @@ type Bays {
   emptyCount: Float!
 }
 
+"""Result of an admin bulk-revoke operation."""
+type BulkRevokePatTokensResult {
+  """Total number of token IDs submitted in the request."""
+  totalRequested: Int!
+
+  """Number of tokens successfully revoked by this operation."""
+  successfullyRevoked: Int!
+
+  """Number of tokens that could not be revoked."""
+  failed: Int!
+
+  """
+  Details of tokens that could not be revoked. Empty when all tokens were revoked successfully.
+  """
+  failedTokens: [FailedPatTokenRevoke!]!
+}
+
 """Details of the drive firmware bundled with the OS version."""
 type BundledDriveFirmware {
   """The model of the drive firmware."""
@@ -2213,7 +2228,17 @@ type CloudVolumeONTAP implements System & ONTAPSystemInterface {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -2300,6 +2325,11 @@ type CloudVolumeONTAP implements System & ONTAPSystemInterface {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -3155,6 +3185,39 @@ type CQVUpdateStatus {
   numberOfSystemsUpdated: Int!
 }
 
+"""Input for creating a new personal access token."""
+input CreatePatTokenInput {
+  """
+  A human-readable description identifying the token's purpose (e.g., Local Terminal Automation).
+  """
+  description: String!
+
+  """Number of days until the token expires. Must be between 1 and 90."""
+  expiryDays: Int!
+}
+
+"""
+Payload returned when a new personal access token is created. The raw token is returned exactly once and is never stored.
+"""
+type CreatePatTokenPayload {
+  """Unique identifier of the personal access token."""
+  id: ID!
+
+  """User-provided description identifying the token's purpose."""
+  description: String!
+
+  """Creation timestamp in UTC."""
+  createdAt: DateTime!
+
+  """
+  Expiration timestamp in UTC. Tokens expire between 1 and 90 days after creation.
+  """
+  expiresAt: DateTime!
+
+  """The personal access token value."""
+  rawToken: String!
+}
+
 """Source from which a customer success plan was created."""
 enum CspSource {
   """Plan was generated automatically from an Adaptive Intake Form (AIF)."""
@@ -3393,7 +3456,7 @@ type CustomerSuccessPlan {
   """Secondary plan title entered by the TAM."""
   title: String
 
-  """Current lifecycle status of the plan."""
+  """Current status of the plan."""
   status: SuccessPlanStatus!
 
   """Customer engagement phase of the plan."""
@@ -3441,11 +3504,22 @@ type CustomerSuccessPlan {
   """Timestamp of the last update to this plan."""
   lastUpdated: DateTime
 
+  """CSP scope for this plan."""
+  scope: SuccessPlanScope
+
+  """Email address of the user who last updated this plan."""
+  lastUpdatedBy: String!
+
   """Unique identifier for the success plan, as stored in the CRM."""
   accountPlanId: String
 
   """
-  Customer success objectives for this plan. Includes a synthetic 'No Objectives' bucket for any actions not tied to a specific objective.
+  True when the current user is the plan's assigned TAM or a listed stakeholder.
+  """
+  allowObjectivesView: Boolean!
+
+  """
+  Customer success objectives for this plan. Empty when `allowObjectivesView` is false.
   """
   objectives: [SuccessPlanObjective!]!
 }
@@ -3681,7 +3755,17 @@ type DCNSystem implements System {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -3768,6 +3852,11 @@ type DCNSystem implements System {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -4615,6 +4704,17 @@ enum ExtendedVolumeStyle {
   INFINITEVOL_CONSTITUENT
 }
 
+"""Details of a token that failed to be revoked."""
+type FailedPatTokenRevoke {
+  """ID of the token that could not be revoked."""
+  tokenId: ID!
+
+  """
+  Reason the token was not revoked (e.g., Token not found, Token already revoked).
+  """
+  reason: String!
+}
+
 """Feature information with category, visibility and identifiers"""
 type Feature {
   """Category of the feature (e.g., Wellness, Value Report)"""
@@ -5374,9 +5474,9 @@ type LUNs {
 """Fields for creating a new success plan action."""
 input MilestoneActionCreateInput {
   """
-  Site CMAT ID (Customer Master Account Table) the success plan belongs to. Used to validate site entitlement before creation.
+  NAGP (NetApp Global Parent Account) id the success plan belongs to. Used to validate site entitlement before creation.
   """
-  siteCMATId: String!
+  nagpId: String!
 
   """Unique id of the account plan the new action belongs to."""
   accountPlanId: String!
@@ -5396,10 +5496,8 @@ input MilestoneActionCreateInput {
   """Date by which the action is expected to be completed."""
   dueDate: DateTime
 
-  """
-  Customer success objective this action contributes to. Matches one of the objectives defined on the parent plan.
-  """
-  objective: String
+  """Customer success objective this action contributes to."""
+  objective: String!
 }
 
 """
@@ -5417,14 +5515,17 @@ input MilestoneActionUpdateInput {
 
   """Date by which the action is expected to be completed."""
   dueDate: DateTime
+
+  """
+  Customer success objective this action contributes to. Matches one of the objectives defined on the parent plan.
+  """
+  objective: String
 }
 
 """Fields for creating a new success plan milestone."""
 input MilestoneCreateInput {
-  """
-  Site CMAT ID (Customer Master Account Table) the success plan belongs to. Used to validate site entitlement before creation.
-  """
-  siteCMATId: String!
+  """NAGP (NetApp Global Parent Account) id the success plan belongs to."""
+  nagpId: String!
 
   """Unique id of the account plan the new milestone belongs to."""
   accountPlanId: String!
@@ -5442,26 +5543,6 @@ input MilestoneCreateInput {
 
   """Customer engagement phase the milestone belongs to."""
   lifecycleStage: SuccessPlanLifecycleStage
-}
-
-"""
-Accepts the same values as SuccessPlanLifecycleStage plus the special sentinel PARENT_LIFECYCLE_STAGE.
-"""
-enum MilestoneLifecycleStageFilter {
-  """Onboarding and initial implementation activities."""
-  ONBOARD_AND_IMPLEMENT
-
-  """Day-to-day operations and optimization activities."""
-  OPERATE_AND_OPTIMIZE
-
-  """Proactive issue prevention and reactive problem solving."""
-  PREVENT_AND_SOLVE
-
-  """Capacity expansion and technology modernization activities."""
-  EXPAND_AND_EVOLVE
-
-  """Expands to the parent plan's own lifecycle stage at query time."""
-  PARENT_LIFECYCLE_STAGE
 }
 
 """Execution status of a success plan milestone or milestone action."""
@@ -5898,12 +5979,10 @@ type Mutation {
     siteId: String!
   ): SiteCarbonMitigationOutput!
 
-  """
-  Update fields on a success plan, milestone, or action for a Site CMAT. The caller must be a Support/Technical Account Manager or a listed stakeholder on the plan. All supplied records are applied atomically.
-  """
+  """Update fields on a success plan, milestone, or action for a NAGP site."""
   updateSuccessPlan(
-    """Site CMAT ID (Customer Master Account Table) of the success plan."""
-    siteCMATId: String!
+    """NAGP (NetApp Global Parent Account) id of the success plan."""
+    nagpId: String!
 
     """Unique id of the account plan to update."""
     accountPlanId: String!
@@ -5919,16 +5998,14 @@ type Mutation {
   ): SuccessPlanMutationResult!
 
   """
-  Create a new success plan for the Site-level Account identified by the supplied Site CMAT id. Returns a UserInputError if the site already has an existing plan.
+  Create a new success plan for the NAGP-level Account identified by the supplied NAGP id.
   """
   createSuccessPlan(
     """Success plan fields."""
     accountPlan: AccountPlanCreateInput!
   ): SuccessPlanCreateResult!
 
-  """
-  Create a new success plan milestone under an existing success plan. The parent success plan is identified by the mandatory `accountPlanId` field in the input.
-  """
+  """Create a new success plan milestone under an existing success plan."""
   createSuccessPlanMilestone(
     """Milestone fields."""
     milestones: MilestoneCreateInput!
@@ -6169,6 +6246,33 @@ type Mutation {
     """The version of the disk qualification package."""
     version: String!
   ): DiskQualificationPackageMeta!
+
+  """
+  Create a new personal access token. The raw token is returned exactly once. Requires an interactive session; PAT-authenticated requests are rejected.
+  """
+  createPatToken(input: CreatePatTokenInput!): CreatePatTokenPayload!
+
+  """
+  Revoke one of the calling user's personal access tokens by its ID. Requires an interactive session; PAT-authenticated requests are rejected.
+  """
+  revokeMyPatToken(
+    """The ID of the personal access token to revoke."""
+    id: String!
+  ): MutationResponse!
+
+  """Admin: revoke multiple personal access tokens in a single operation."""
+  revokePatTokens(
+    """IDs of the tokens to revoke. Maximum 200 per request."""
+    tokenIds: [ID!]!
+  ): BulkRevokePatTokensResult!
+}
+
+type MutationResponse {
+  """Status code for the API."""
+  status: String!
+
+  """Success or failure message."""
+  message: String!
 }
 
 """
@@ -6686,7 +6790,17 @@ type ONTAPSystem implements System & ONTAPSystemInterface {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -6773,6 +6887,11 @@ type ONTAPSystem implements System & ONTAPSystemInterface {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -7612,6 +7731,70 @@ type OtherAdapter implements Adapter {
 
   """Serial number of the adapter hardware component."""
   serialNumber: String
+}
+
+"""A personal access token issued for programmatic API access."""
+type PatToken {
+  """Unique identifier of the personal access token."""
+  id: ID!
+
+  """User-provided description identifying the token's purpose."""
+  description: String!
+
+  """Creation timestamp in UTC."""
+  createdAt: DateTime!
+
+  """
+  Expiration timestamp in UTC. Tokens expire between 1 and 90 days after creation.
+  """
+  expiresAt: DateTime!
+
+  """Azure Entra Object ID of the user who created this token."""
+  userId: String!
+
+  """Email address of the user at time of token creation."""
+  userEmail: String!
+
+  """Lifecycle state derived from timestamps."""
+  state: PatTokenState!
+
+  """Timestamp of the last successful authentication in UTC."""
+  lastUsedAt: DateTime
+
+  """
+  Timestamp when this token was revoked in UTC. Present only when state is REVOKED.
+  """
+  revokedAt: DateTime
+}
+
+"""Paginated list of personal access tokens returned by an admin query."""
+type PatTokens {
+  """Total number of tokens matching the filter, regardless of pagination."""
+  totalCount: Int!
+
+  """
+  Cursor for fetching the next page. Pass this value to the next query's after parameter. Returns '0' when no further pages exist.
+  """
+  cursor: String!
+
+  """Tokens for the requested page."""
+  tokens: [PatToken!]!
+}
+
+"""
+Lifecycle state of a personal access token, derived from timestamps (not stored).
+"""
+enum PatTokenState {
+  """Token is valid and can authenticate API requests."""
+  ACTIVE
+
+  """Token has passed its expiration date and can no longer authenticate."""
+  EXPIRED
+
+  """
+  Token was explicitly revoked and can no longer authenticate. Revocation takes effect within the cache TTL (≤1 hour).
+  """
+  REVOKED
 }
 
 """The capacity actually present on the storage device."""
@@ -10032,6 +10215,11 @@ type Query {
     Filter systems by lifecycle event attributes such as criticality codes and workflow categories.
     """
     lifecycleEventArgs: LifecycleEventArgs
+
+    """
+    When true, restrict results to success plans that have a CSP scope assigned.
+    """
+    isCSPScoped: Boolean
   ): SuccessPlanResult
 
   """Get simulated workload profiles."""
@@ -10755,6 +10943,32 @@ type Query {
     """
     distinctMajorOSVersions: Boolean! = false
   ): OSVersions!
+
+  """
+  List all personal access tokens owned by the calling user. Requires an interactive session; PAT-authenticated requests are rejected.
+  """
+  myPatTokens: [PatToken!]!
+
+  """
+  Admin: list personal access tokens across all users, with optional filtering and pagination. pageSize is clamped to 1..200 for this query.
+  """
+  patTokens(
+    """
+    The number of results to return. If not specified, a default page size is used. Specify -1 for the largest page size suggested by the server. (The maximum page size for the systems.risks query is 1000.)
+    """
+    pageSize: Int
+
+    """If specified, return results after this cursor."""
+    after: String
+
+    """Filter by owner's Azure Entra Object ID."""
+    userId: String
+
+    """
+    When true, return only revoked tokens; when false, return only non-revoked tokens; when omitted, return all.
+    """
+    isRevoked: Boolean
+  ): PatTokens!
   GetProductMilestones(input: AppDrlAndId!): [ProductMilestones!]!
 }
 
@@ -11314,6 +11528,11 @@ type Risk {
   cves: [CVE!]!
 
   """
+  Indicates whether this risk is part of a health diagnostic check. Health diagnostic risks are a curated subset evaluated by the Cluster Health Diagnostics feature, distinct from general advisory risks and incident-derived risks.
+  """
+  isHealthDiagnostic: Boolean
+
+  """
   NetApp BURT/JIRA reference identifiers (external bug tracking IDs) associated with this risk.
   """
   burtReferences: [String!]!
@@ -11495,6 +11714,11 @@ type Risk {
   Weightage for a rule. This weightage is aggregated to calculate the score for a triggered risk.
   """
   weightage: Int
+
+  """
+  Count of risks that transitioned to an inactive state within the filter.riskResolvedInRange date range. Returns the all-time resolved count when no date range is specified.
+  """
+  riskResolvedCount: Int!
 }
 
 """Risk Acknowledgement details"""
@@ -11691,6 +11915,16 @@ input RiskCountFilter {
   origin: RiskOrigin
 
   """
+  Date range used to calculate riskResolvedCount. When set, risks of any status (not just active or acknowledged) are included in this query's results, since resolved risks are no longer active or acknowledged.
+  """
+  riskResolvedInRange: DateRange
+
+  """
+  Filters risks by health diagnostic classification. true = only health diagnostic risks; false = only risks explicitly marked non-health-diagnostic; omit to return all risks.
+  """
+  isHealthDiagnostic: Boolean
+
+  """
   Text filter based on clustername, supports PCRE regex searches, without flags. Searches will be case-insensitive
   """
   clusterName: String
@@ -11758,6 +11992,16 @@ input RiskFilter {
   Filter risks based on their origin — whether proactively detected by Digital Advisor health monitoring or derived from a NetApp support incident.
   """
   origin: RiskOrigin
+
+  """
+  Filter risks resolved within this date range. Risks that are not resolved during this time period are excluded.
+  """
+  riskResolvedInRange: DateRange
+
+  """
+  Filters risks by health diagnostic classification. true = only health diagnostic risks; false = only risks explicitly marked non-health-diagnostic; omit to return all risks.
+  """
+  isHealthDiagnostic: Boolean
 }
 
 """Area of impact on a product"""
@@ -11834,6 +12078,11 @@ type RiskInstance {
 
   """List of OS or firmware versions that fix this security risk."""
   fixedVersions: [FixedVersion!]!
+
+  """
+  Count of instances of this risk resolved (transitioned to inactive) within the filter.riskResolvedInRange date range. With no date specified, returns the all-time resolved count for risks matching the active or acknowledged filter conditions
+  """
+  riskResolvedCount: Int!
 }
 
 input RiskInstanceFilter {
@@ -11882,6 +12131,16 @@ input RiskInstanceFilter {
   Filter risks based on their origin — whether proactively detected by Digital Advisor health monitoring or derived from a NetApp support incident.
   """
   origin: RiskOrigin
+
+  """
+  Filter risks resolved within this date range. Risks that are not resolved during this time period are excluded.
+  """
+  riskResolvedInRange: DateRange
+
+  """
+  Filters risks by health diagnostic classification. true = only health diagnostic risks; false = only risks explicitly marked non-health-diagnostic; omit to return all risks.
+  """
+  isHealthDiagnostic: Boolean
 
   """
   Text filter based on clustername, supports PCRE regex searches, without flags. Searches will be case-insensitive
@@ -12031,6 +12290,11 @@ type RiskMetadata {
   cves: [CVE!]!
 
   """
+  Indicates whether this risk is part of a health diagnostic check. Health diagnostic risks are a curated subset evaluated by the Cluster Health Diagnostics feature, distinct from general advisory risks and incident-derived risks.
+  """
+  isHealthDiagnostic: Boolean
+
+  """
   NetApp BURT/JIRA reference identifiers (external bug tracking IDs) associated with this risk.
   """
   burtReferences: [String!]!
@@ -12121,6 +12385,11 @@ type RisksCount {
 
   """Count of actions."""
   actionCount: Int
+
+  """
+  Count of risks resolved that transitioned to an inactive state within the filter.riskResolvedInRange date range, scoped to risks of any status. With no date specified, returns the all-time resolved count for risks matching the active or acknowledged filter conditions. When filter.riskResolvedInRange is specified, riskCount, systemCount, and actionCount also include risks of any status, not just active or acknowledged.
+  """
+  riskResolvedCount: Int!
 
   """
   Applies groupby field on risk instances and gives count of risk, system or action recursively
@@ -12539,7 +12808,17 @@ type SantricitySystem implements System & StorageGridChildNodeInterface {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -12626,6 +12905,11 @@ type SantricitySystem implements System & StorageGridChildNodeInterface {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -13253,39 +13537,47 @@ type ShelfPortsConnection {
 
 """Shelf product identifier"""
 enum ShelfProductIdentification {
-  DS212_12
-  DS2126
-  DS224_12
-  DS2246
-  DS4246
-  DS4486
-  DS460_12
-  DS46012
-  FS424_12
   DS12_ESAS
-  DS2246E
   DS14
-  DS14_MK4_FC
-  DS4246E
-  DS14_MK2_AT
-  S500_C1300
-  DS2126E
-  FS4483PSM3E
-  DS4243
   DS14_HA
-  S300
-  DS20_ESAS
-  NS224NSM100
-  NX224NSM100
-  NX224NSM140
-  S550_C1300
+  DS14_MK2_AT
   DS14_MK2_FC
-  NS224NSM8E
-  XL500
+  DS14_MK4_FC
+  DS20_ESAS
+  DS2126
+  DS2126E
+  DS212_12
+  DS212C
+  DS2246
+  DS2246E
+  DS224C
+  DS224_12
+  DS4243
+  DS4246
+  DS4246E
+  DS4486
+  DS46012
+  DS460_12
+  DS460C
+  FS424_12
+  FS424C
+  FS4483
+  FS4483NSM16E
+  FS4483PSM3E
   NETCACHE_C3300
+  NS224
+  NS224_W_NSM100B
+  NS224NSM100
   NS224NSM100B
   NS224NSM16E
-  FS4483NSM16E
+  NS224NSM8E
+  NX224
+  NX224NSM100
+  NX224NSM140
+  S300
+  S500_C1300
+  S550_C1300
+  XL500
 }
 
 """
@@ -14019,7 +14311,17 @@ type StorageGrid implements System {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -14106,6 +14408,11 @@ type StorageGrid implements System {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -14403,7 +14710,17 @@ type StorageGridChildNode implements System & StorageGridChildNodeInterface {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -14490,6 +14807,11 @@ type StorageGridChildNode implements System & StorageGridChildNodeInterface {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -14654,7 +14976,17 @@ interface StorageGridChildNodeInterface implements System {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -14741,6 +15073,11 @@ interface StorageGridChildNodeInterface implements System {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -14965,7 +15302,17 @@ type StorageGridNode implements System {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -15052,6 +15399,11 @@ type StorageGridNode implements System {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -15223,6 +15575,67 @@ enum StorageVirtualMachineType {
   ADMIN
   NODE
   DATA
+}
+
+"""
+Health score for a system, including overall score and per-KPI breakdown.
+"""
+type StoredHealthScore {
+  """Overall health score."""
+  overallHealthScore: Int!
+
+  """Date when health score was calculated."""
+  calculatedAt: DateTime!
+
+  """Score breakdown by KPI."""
+  kpis: StoredHealthScoreKPIs!
+}
+
+"""Health score values for a KPI."""
+type StoredHealthScoreKPI {
+  """Points earned for this KPI."""
+  gainedPoints: Int!
+
+  """Percentage of points earned for this KPI."""
+  gainedPercentage: Int!
+
+  """Potential point improvement for this KPI."""
+  improvementPoints: Int!
+
+  """Potential improvement percentage for this KPI."""
+  improvementPercentage: Int!
+}
+
+"""Health score breakdown by KPI."""
+type StoredHealthScoreKPIs {
+  """Health score for AutoSupport (ASUP) data transmission compliance."""
+  asup: StoredHealthScoreKPI!
+
+  """Health score for ONTAP software freshness and currency."""
+  osFreshness: StoredHealthScoreKPI!
+
+  """Health score for firmware currency across system components."""
+  firmware: StoredHealthScoreKPI!
+
+  """Health score for security hardening posture and controls."""
+  securityHardening: StoredHealthScoreKPI!
+
+  """
+  Health score for sustainability and environmental efficiency indicators.
+  """
+  sustainability: StoredHealthScoreKPI!
+
+  """Health score for system uptime and availability."""
+  uptime: StoredHealthScoreKPI!
+
+  """Health score for end-of-support (EOS) lifecycle readiness."""
+  eos: StoredHealthScoreKPI!
+
+  """Health score for add-on feature and entitlement health checks."""
+  addon: StoredHealthScoreKPI!
+
+  """Health score for technology refresh readiness and lifecycle posture."""
+  techRefresh: StoredHealthScoreKPI!
 }
 
 """Measurable KPI tied to a customer success plan objective."""
@@ -15417,11 +15830,11 @@ type SuccessPlanMutationResult {
 }
 
 """
-An objective within a customer success plan. One entry is returned per objective defined on the customer success plan, plus a synthetic 'No Objectives' bucket for any actions not tied to a specific objective.
+An objective within a customer success plan. One entry is returned per objective defined on the customer success plan.
 """
 type SuccessPlanObjective {
   """
-  Objective name; matches one of the objectives defined on the customer success plan, or the literal 'No Objectives' for actions not tied to a specific objective.
+  Objective name; matches one of the objectives defined on the customer success plan.
   """
   name: String!
 
@@ -15443,15 +15856,15 @@ type SuccessPlanResult {
   """
   cursor: String!
 
-  """Success plans grouped by Site CMAT ID (CUSTOMER MASTER ACCOUNT TABLE)."""
+  """Success plans grouped by NAGP (NetApp Global Parent Account) id."""
   details: [SuccessPlans!]!
 
   """Aggregated headline counters for the returned success plans."""
   summary(
     """
-    Optional filter restricting which milestones by lifecycle stage. Accepts the same values as SuccessPlanLifecycleStage plus the special sentinel PARENT_LIFECYCLE_STAGE.
+    Restrict the summary to the plan with this CSP (Customer success plan) id.
     """
-    milestoneLifecycleStages: [MilestoneLifecycleStageFilter!]
+    cspId: String
 
     """
     Group summary entries by this criterion. When omitted, a single roll-up entry is returned.
@@ -15461,22 +15874,42 @@ type SuccessPlanResult {
 }
 
 """
-Customer success plans for a single site, grouped by Site CMAT ID (CUSTOMER MASTER ACCOUNT TABLE).
+Customer success plans, grouped by NAGP (NetApp Global Parent Account) id.
 """
 type SuccessPlans {
   """
-  Site CMAT (CUSTOMER MASTER ACCOUNT TABLE) id for this group of success plans.
+  NAGP (NetApp Global Parent Account) id for this group of success plans.
   """
-  cmatSiteId: String!
+  nagpId: String!
 
-  """Name of the site."""
-  cmatSiteName: String
+  """Name of the NAGP."""
+  nagpName: String!
 
-  """Success plans for this Site CMAT ID (CUSTOMER MASTER ACCOUNT TABLE)."""
+  """Success plans for this NAGP (NetApp Global Parent Account) id."""
   successPlans(
     """Filter to return the plan with this CSP(Customer success plan) id."""
     cspId: String
   ): [CustomerSuccessPlan!]!
+}
+
+"""
+CSP scope identifying which customers/data a success plan is limited to.
+"""
+type SuccessPlanScope {
+  """Customer success plan scope ID."""
+  id: String!
+
+  """Customer success plan scope name."""
+  name: String
+}
+
+"""CSP scope to associate with a success plan."""
+input SuccessPlanScopeInput {
+  """Customer success plan scope ID."""
+  id: String!
+
+  """Customer success plan scope name."""
+  name: String
 }
 
 """A customer stakeholder associated with a success plan."""
@@ -15516,41 +15949,35 @@ enum SuccessPlanStatus {
 }
 
 """
-Aggregated headline counters across the success plans returned by the `successPlan` query. Computed from the milestones and actions across all in-scope plans. When the `summary` field is called with a `groupBy` argument, one entry is returned per group (e.g. one per CMAT site); otherwise a single roll-up entry is returned covering every in-scope plan.
+Aggregated headline counters across the success plans returned by the `successPlan` query. Computed from the milestones and actions across all in-scope plans. When the `summary` field is called with a `groupBy` argument, one entry is returned per group (e.g. one per NAGP id); otherwise a single roll-up entry is returned covering every in-scope plan.
 """
 type SuccessPlanSummary {
-  """Number of action items with a status of Blocked."""
-  needsAttention: Int!
-
-  """Number of action items with a status of Overdue."""
-  overdue: Int!
-
-  """Total number of outcomes across all returned plans."""
-  totalOutcomes: Int!
-
-  """Total number of action items across all returned plans."""
-  totalActionItems: Int!
-
   """Number of success plans covered by this summary."""
   successPlanCount: Int!
+
+  """Number of unlinked success plans covered by this summary."""
+  unlinkedSuccessPlanCount: Int!
+
+  """
+  Number of distinct TAM (Technical Account Manager) owners across the success plans covered by this summary.
+  """
+  tamOwnerCount: Int!
 
   """List of customer engagement phases covered by this summary."""
   lifecycleStages: [SuccessPlanLifecycleStage!]!
 
   """
-  List of Site CMAT IDs (CUSTOMER MASTER ACCOUNT TABLE) covered by this summary.
+  List of NAGP (NetApp Global Parent Account) ids covered by this summary.
   """
-  siteCMATIds: [String!]!
+  nagpIds: [String!]!
 }
 
 """
 Controls how success plan summary counters are grouped in the response. When supplied to the `groupBy` argument, one summary entry is returned per group instead of a single roll-up.
 """
 enum SuccessPlanSummaryGroupBy {
-  """
-  One summary entry per distinct Site CMAT (CUSTOMER MASTER ACCOUNT TABLE) id in scope.
-  """
-  SITE_CMAT
+  """One summary entry per distinct NAGP id in scope."""
+  NAGP
 }
 
 """Template used to author the customer success plan."""
@@ -15627,6 +16054,11 @@ type Summary {
     """Month range for the data (first day of each month). Required."""
     monthRange: DateRange!
   ): [AttributeHistoryEntry!]!
+
+  """
+  Averaged health score across all matched systems, including overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 }
 
 """
@@ -15961,7 +16393,17 @@ interface System {
   salesRepresentative: SystemContactPerson
 
   """Customer Success Manager."""
-  csm: SystemContactPerson
+  csm: SystemContactPerson @deprecated(reason: "Use retentionSpecialist and solutionEngineerSpecialist instead.")
+
+  """
+  Retention Specialist (RS) is a customer-facing role focused on renewal excellence, install base (IB) management, retention, forecasting, and renewal/add-on sales execution.
+  """
+  retentionSpecialist: SystemContactPerson
+
+  """
+  Drives customer success by designing, demonstrating, and evangelising technical solutions that solve business challenges and accelerate adoption.
+  """
+  solutionEngineerSpecialist: SystemContactPerson
 
   """
   A SAM(Support Account Manager) is an employee assigned to customer to optimize storage infrastructure and perform as a customer advocate.
@@ -16048,6 +16490,11 @@ interface System {
   Monthly statistics for support cases, including total cases and those resolved automatically.
   """
   monthlyAutoResolvedCases: [MonthlyAutoResolvedCases!]!
+
+  """
+  Stored health score for this system, including the overall score and per-KPI breakdown.
+  """
+  healthScore: StoredHealthScore
 
   """Downtime events for this system, sourced from AutoSupport data."""
   downtimeEvents(
@@ -16653,6 +17100,16 @@ input SystemRiskFilter {
   Filter risks based on their origin — whether proactively detected by Digital Advisor health monitoring or derived from a NetApp support incident.
   """
   origin: RiskOrigin
+
+  """
+  Filter risks resolved within this date range. Risks that are not resolved during this time period are excluded.
+  """
+  riskResolvedInRange: DateRange
+
+  """
+  Filters risks by health diagnostic classification. true = only health diagnostic risks; false = only risks explicitly marked non-health-diagnostic; omit to return all risks.
+  """
+  isHealthDiagnostic: Boolean
 
   """
   Filter data based on error detail text, supports PCRE regex searches, without flags. Searches will be case-insensitive
