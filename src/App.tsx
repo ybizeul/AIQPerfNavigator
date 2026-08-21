@@ -1717,10 +1717,12 @@ function NodeInfo({
   node,
   label,
   workloads,
+  workloadsLoading,
 }: {
   node: SystemSummary | null
   label: string
   workloads?: WorkloadsSummary | null
+  workloadsLoading?: boolean
 }) {
   if (!node) {
     return (
@@ -1754,7 +1756,12 @@ function NodeInfo({
       ) : (
         <Text size="xs" c="dimmed">No capacity data</Text>
       )}
-      {workloads ? (() => {
+      {workloadsLoading ? (
+        <Stack gap={4}>
+          <Text size="xs" fw={500} c="blue">Loading volume data...</Text>
+          <Skeleton h={6} radius="xl" />
+        </Stack>
+      ) : workloads ? (() => {
         const fmt = (kib: number) => {
           const tib = kib / 1024 ** 3
           return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
@@ -1799,6 +1806,8 @@ function HAPairCard({
   isRefreshing,
   node1Workloads,
   node2Workloads,
+  node1WorkloadsLoading,
+  node2WorkloadsLoading,
 }: {
   pair: HAPair | SavedHAPair
   action?: () => void
@@ -1808,6 +1817,8 @@ function HAPairCard({
   isRefreshing?: boolean
   node1Workloads?: WorkloadsSummary | null
   node2Workloads?: WorkloadsSummary | null
+  node1WorkloadsLoading?: boolean
+  node2WorkloadsLoading?: boolean
 }) {
   const { node1, node2 } = pair
 
@@ -1843,11 +1854,21 @@ function HAPairCard({
         {/* Two nodes side by side */}
         <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo node={node1} label="Node 1" workloads={node1Workloads} />
+            <NodeInfo
+              node={node1}
+              label="Node 1"
+              workloads={node1Workloads}
+              workloadsLoading={node1WorkloadsLoading}
+            />
           </div>
           <Divider orientation="vertical" />
           <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo node={node2} label="Node 2" workloads={node2Workloads} />
+            <NodeInfo
+              node={node2}
+              label="Node 2"
+              workloads={node2Workloads}
+              workloadsLoading={node2WorkloadsLoading}
+            />
           </div>
         </div>
 
@@ -1957,6 +1978,8 @@ function App() {
   const [showHeadroom, setShowHeadroom] = useState(false)
   const [refreshingCapacity, setRefreshingCapacity] = useState<Set<string>>(new Set())
   const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
+  const [workloadsLoading, setWorkloadsLoading] = useState<Set<string>>(new Set())
+  const workloadsLoadingRef = useRef(new Set<string>())
   const [capacitySelectedPairKeys, setCapacitySelectedPairKeys] = useState<Set<string>>(new Set())
   const [capacityTagFilter, setCapacityTagFilter] = useState<string[]>([])
 
@@ -2255,6 +2278,42 @@ function App() {
     )
   }
 
+  const handleCapacityPairSelection = (pairKey: string) => {
+    const isSelected = capacitySelectedPairKeys.has(pairKey)
+    if (!isSelected) {
+      void handleRefreshCapacity(pairKey)
+    }
+    setCapacitySelectedPairKeys((current) => {
+      const next = new Set(current)
+      if (next.has(pairKey)) {
+        next.delete(pairKey)
+      } else {
+        next.add(pairKey)
+      }
+      return next
+    })
+  }
+
+  const loadWorkloadsIfNeeded = async (accessToken: string, systemId: string) => {
+    if (workloadsData.has(systemId) || workloadsLoadingRef.current.has(systemId)) return
+
+    workloadsLoadingRef.current.add(systemId)
+    setWorkloadsLoading((current) => new Set(current).add(systemId))
+    try {
+      const workloads = await fetchWorkloads(accessToken, systemId)
+      if (workloads) {
+        setWorkloadsData((current) => new Map(current).set(systemId, workloads))
+      }
+    } finally {
+      workloadsLoadingRef.current.delete(systemId)
+      setWorkloadsLoading((current) => {
+        const next = new Set(current)
+        next.delete(systemId)
+        return next
+      })
+    }
+  }
+
   const handleRefreshCapacity = async (pairKey: string) => {
     if (!refreshToken) return
 
@@ -2281,12 +2340,10 @@ function App() {
       )
 
       if (pair.node1.systemId) {
-        const w = await fetchWorkloads(accessToken, pair.node1.systemId)
-        if (w) setWorkloadsData((current) => new Map(current).set(pair.node1.systemId!, w))
+        await loadWorkloadsIfNeeded(accessToken, pair.node1.systemId)
       }
       if (pair.node2?.systemId) {
-        const w = await fetchWorkloads(accessToken, pair.node2.systemId)
-        if (w) setWorkloadsData((current) => new Map(current).set(pair.node2!.systemId!, w))
+        await loadWorkloadsIfNeeded(accessToken, pair.node2.systemId)
       }
     }
 
@@ -2877,6 +2934,8 @@ function App() {
                                       isRefreshing={refreshingCapacity.has(pair.key)}
                                       node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
                                       node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
+                                      node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
+                                      node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
                                       tagsEditor={
                                         <TagsEditor
                                           value={pair.tags}
@@ -3553,12 +3612,7 @@ function App() {
                                       </Stack>
                                     }
                                     active={capacitySelectedPairKeys.has(pair.key)}
-                                    onClick={() => setCapacitySelectedPairKeys((current) => {
-                                      const next = new Set(current)
-                                      if (next.has(pair.key)) next.delete(pair.key)
-                                      else next.add(pair.key)
-                                      return next
-                                    })}
+                                    onClick={() => handleCapacityPairSelection(pair.key)}
                                   />
                                 ))}
                               </div>
@@ -3584,6 +3638,8 @@ function App() {
                                 isRefreshing={refreshingCapacity.has(pair.key)}
                                 node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
                                 node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
+                                node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
+                                node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
                                 tagsEditor={
                                   <TagsEditor
                                     value={pair.tags}
@@ -3624,6 +3680,7 @@ function App() {
                               { totalUsedKB: 0, totalSnapshotsKiB: 0, totalSizeKB: 0 },
                             )
                             const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
+                            const areWorkloadsLoading = nodes.some((n) => n.systemId && workloadsLoading.has(n.systemId))
                             return (
                               <Paper withBorder radius="lg" p="md">
                                 <Stack gap="md">
@@ -3634,7 +3691,12 @@ function App() {
                                     </Text>
                                   </div>
                                   <CapacityGauge capacity={agg} />
-                                  {hasWorkloads ? (() => {
+                                  {areWorkloadsLoading ? (
+                                    <Stack gap={4}>
+                                      <Text size="sm" fw={500} c="blue">Loading volume data...</Text>
+                                      <Skeleton h={8} radius="xl" />
+                                    </Stack>
+                                  ) : hasWorkloads ? (() => {
                                     const fmt = (kib: number) => {
                                       const tib = kib / 1024 ** 3
                                       return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
