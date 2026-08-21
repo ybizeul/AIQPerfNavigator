@@ -29,6 +29,7 @@ import {
   Skeleton,
   Stack,
   Switch,
+  Table,
   Tabs,
   Text,
   TextInput,
@@ -302,13 +303,21 @@ type SearchResultState = {
   siteFilterWasClientSide: boolean
 }
 
-type WorkloadsSummary = {
+type VolumeCapacityBase = {
   totalUsedKB: number
   totalSnapshotsKiB: number
   totalSizeKB: number
 }
 
-function getVolumeUsage(workloads: WorkloadsSummary) {
+type VolumeDetail = VolumeCapacityBase & {
+  name: string
+}
+
+type WorkloadsSummary = VolumeCapacityBase & {
+  volumes: VolumeDetail[]
+}
+
+function getVolumeUsage(workloads: VolumeCapacityBase) {
   const totalSizeKiB = workloads.totalSizeKB * 1000 / 1024
   const totalUsedKiB = workloads.totalUsedKB * 1000 / 1024
   const actualUsedKiB = Math.max(0, totalUsedKiB - workloads.totalSnapshotsKiB)
@@ -992,6 +1001,7 @@ const WORKLOADS_QUERY = `
         ... on ONTAPSystem {
           storageVolumes {
             volumes {
+              name
               capacity {
                 sizeKB
                 usedKB
@@ -1008,6 +1018,7 @@ const WORKLOADS_QUERY = `
 `
 
 type WorkloadsVolume = {
+  name: string | null
   capacity: {
     sizeKB: number | null
     usedKB: number | null
@@ -1069,7 +1080,13 @@ async function fetchWorkloads(
     0,
   )
   const totalSizeKB = volumes.reduce((sum, v) => sum + (v.capacity?.sizeKB ?? 0), 0)
-  return { totalUsedKB, totalSnapshotsKiB, totalSizeKB }
+  const volumeDetails: VolumeDetail[] = volumes.map((v) => ({
+    name: v.name ?? 'Unnamed volume',
+    totalUsedKB: v.capacity?.usedKB ?? 0,
+    totalSnapshotsKiB: v.capacity?.logical?.usedSnapshotsKiB ?? 0,
+    totalSizeKB: v.capacity?.sizeKB ?? 0,
+  }))
+  return { totalUsedKB, totalSnapshotsKiB, totalSizeKB, volumes: volumeDetails }
 }
 
 async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
@@ -1723,6 +1740,78 @@ function CapacityGauge({
         </Progress.Root>
       </Tooltip.Group>
     </Stack>
+  )
+}
+
+function fmtVolumeSize(kib: number) {
+  const tib = kib / 1024 ** 3
+  return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
+}
+
+function VolumeGauge({ volume }: { volume: VolumeCapacityBase }) {
+  const usage = getVolumeUsage(volume)
+  const usedColor = usage.actualUsedPercent >= 90 ? 'red' : usage.actualUsedPercent >= 75 ? 'orange' : 'green'
+  const snapshotPercent = Math.min(
+    usage.snapshotUsedPercent,
+    Math.max(0, 100 - usage.actualUsedPercent),
+  )
+  return (
+    <Stack gap={2}>
+      <Text size="xs" c="dimmed">
+        {fmtVolumeSize(usage.actualUsedKiB)} actual + {fmtVolumeSize(volume.totalSnapshotsKiB)} snapshots / {fmtVolumeSize(usage.totalSizeKiB)}
+      </Text>
+      <Tooltip.Group openDelay={300} closeDelay={100}>
+        <Progress.Root size="sm">
+          <Tooltip label={`Actual used: ${fmtVolumeSize(usage.actualUsedKiB)}`}>
+            <Progress.Section value={usage.actualUsedPercent} color={usedColor} />
+          </Tooltip>
+          {snapshotPercent > 0 ? (
+            <Tooltip label={`Snapshots: ${fmtVolumeSize(volume.totalSnapshotsKiB)}`}>
+              <Progress.Section value={snapshotPercent} color="violet" />
+            </Tooltip>
+          ) : null}
+        </Progress.Root>
+      </Tooltip.Group>
+    </Stack>
+  )
+}
+
+function VolumesTable({
+  volumes,
+}: {
+  volumes: Array<{ nodeLabel: string; volume: VolumeDetail }>
+}) {
+  if (volumes.length === 0) return null
+
+  const showNodeColumn = new Set(volumes.map((v) => v.nodeLabel)).size > 1
+
+  return (
+    <Table verticalSpacing="xs" highlightOnHover>
+      <Table.Thead>
+        <Table.Tr>
+          {showNodeColumn ? <Table.Th>Node</Table.Th> : null}
+          <Table.Th>Volume</Table.Th>
+          <Table.Th>Used / snapshots</Table.Th>
+        </Table.Tr>
+      </Table.Thead>
+      <Table.Tbody>
+        {volumes.map(({ nodeLabel, volume }, index) => (
+          <Table.Tr key={`${nodeLabel}-${volume.name}-${index}`}>
+            {showNodeColumn ? (
+              <Table.Td>
+                <Text size="xs" c="dimmed">{nodeLabel}</Text>
+              </Table.Td>
+            ) : null}
+            <Table.Td>
+              <Text size="xs" fw={500}>{volume.name}</Text>
+            </Table.Td>
+            <Table.Td style={{ minWidth: 220 }}>
+              <VolumeGauge volume={volume} />
+            </Table.Td>
+          </Table.Tr>
+        ))}
+      </Table.Tbody>
+    </Table>
   )
 }
 
@@ -3661,23 +3750,45 @@ function App() {
                             const [pairKey] = capacitySelectedPairKeys
                             const pair = savedPairMap.get(pairKey)
                             if (!pair) return null
+                            const node1Workloads = pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null
+                            const node2Workloads = pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null
+                            const volumeRows = [
+                              ...(node1Workloads?.volumes ?? []).map((volume) => ({
+                                nodeLabel: pair.node1.hostName || pair.node1.serialNumber,
+                                volume,
+                              })),
+                              ...(node2Workloads?.volumes ?? []).map((volume) => ({
+                                nodeLabel: pair.node2!.hostName || pair.node2!.serialNumber,
+                                volume,
+                              })),
+                            ]
                             return (
-                              <HAPairCard
-                                pair={pair}
-                                onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
-                                isRefreshing={refreshingCapacity.has(pair.key)}
-                                node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
-                                node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
-                                node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
-                                node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
-                                tagsEditor={
-                                  <TagsEditor
-                                    value={pair.tags}
-                                    onChange={(value) => handleTagsChange(pair.key, value)}
-                                    allTags={allTags}
-                                  />
-                                }
-                              />
+                              <Stack gap="md">
+                                <HAPairCard
+                                  pair={pair}
+                                  onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
+                                  isRefreshing={refreshingCapacity.has(pair.key)}
+                                  node1Workloads={node1Workloads}
+                                  node2Workloads={node2Workloads}
+                                  node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
+                                  node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
+                                  tagsEditor={
+                                    <TagsEditor
+                                      value={pair.tags}
+                                      onChange={(value) => handleTagsChange(pair.key, value)}
+                                      allTags={allTags}
+                                    />
+                                  }
+                                />
+                                {volumeRows.length > 0 ? (
+                                  <Paper withBorder radius="lg" p="md">
+                                    <Stack gap="sm">
+                                      <Text fw={500}>Volumes ({volumeRows.length})</Text>
+                                      <VolumesTable volumes={volumeRows} />
+                                    </Stack>
+                                  </Paper>
+                                ) : null}
+                              </Stack>
                             )
                           })() : (() => {
                             const selectedPairs = Array.from(capacitySelectedPairKeys)
@@ -3711,7 +3822,15 @@ function App() {
                             )
                             const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
                             const areWorkloadsLoading = nodes.some((n) => n.systemId && workloadsLoading.has(n.systemId))
+                            const volumeRows = nodes.flatMap((node) => {
+                              const w = node.systemId ? workloadsData.get(node.systemId) : null
+                              return (w?.volumes ?? []).map((volume) => ({
+                                nodeLabel: node.hostName || node.serialNumber,
+                                volume,
+                              }))
+                            })
                             return (
+                              <Stack gap="md">
                               <Paper withBorder radius="lg" p="md">
                                 <Stack gap="md">
                                   <div>
@@ -3760,6 +3879,15 @@ function App() {
                                   })() : null}
                                 </Stack>
                               </Paper>
+                              {volumeRows.length > 0 ? (
+                                <Paper withBorder radius="lg" p="md">
+                                  <Stack gap="sm">
+                                    <Text fw={500}>Volumes ({volumeRows.length})</Text>
+                                    <VolumesTable volumes={volumeRows} />
+                                  </Stack>
+                                </Paper>
+                              ) : null}
+                              </Stack>
                             )
                           })()}
                         </div>
