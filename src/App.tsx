@@ -80,7 +80,6 @@ const SYSTEMS_FIELDS = `
         customer {
           id
           name
-          cmatId
         }
         site {
           id
@@ -291,8 +290,26 @@ type SearchResultState = {
 }
 
 type WorkloadsSummary = {
-  totalUsedKiB: number
+  totalUsedKB: number
+  totalSnapshotsKiB: number
   totalSizeKB: number
+}
+
+function getVolumeUsage(workloads: WorkloadsSummary) {
+  const totalSizeKiB = workloads.totalSizeKB * 1000 / 1024
+  const totalUsedKiB = workloads.totalUsedKB * 1000 / 1024
+  const actualUsedKiB = Math.max(0, totalUsedKiB - workloads.totalSnapshotsKiB)
+  const actualUsedPercent = totalSizeKiB > 0 ? (actualUsedKiB / totalSizeKiB) * 100 : 0
+  const snapshotUsedPercent = totalSizeKiB > 0
+    ? (workloads.totalSnapshotsKiB / totalSizeKiB) * 100
+    : 0
+  return {
+    totalSizeKiB,
+    totalUsedKiB,
+    actualUsedKiB,
+    actualUsedPercent,
+    snapshotUsedPercent,
+  }
 }
 
 type TokenRefreshResponse = {
@@ -956,44 +973,50 @@ async function fetchClusterForSystem(
 }
 
 const WORKLOADS_QUERY = `
-  query Workloads($systemId: String, $pageSize: Int!, $after: String) {
-    workloads(systemKey: { systemId: $systemId }, pageSize: $pageSize, after: $after) {
-      totalCount
-      cursor
-      volumes {
-        name
-        capacity {
-          usedKiB
-          sizeKB
+  query StorageVolumes($systemKey: [SystemKey!]) {
+    systems(systemKey: $systemKey) {
+      systems {
+        ... on ONTAPSystem {
+          storageVolumes {
+            volumes {
+              capacity {
+                sizeKB
+                usedKB
+                logical {
+                  usedSnapshotsKiB
+                }
+              }
+            }
+          }
         }
       }
     }
   }
 `
 
-const WORKLOADS_PAGE_SIZE = 100
-
 type WorkloadsVolume = {
-  name: string
-  capacity: { usedKiB: number | null; sizeKB: number | null } | null
+  capacity: {
+    sizeKB: number | null
+    usedKB: number | null
+    logical: { usedSnapshotsKiB: number | null } | null
+  } | null
 }
 
-type WorkloadsPageData = {
-  workloads: {
-    totalCount: number
-    cursor: string | null
-    volumes: WorkloadsVolume[] | null
+type StorageVolumesPageData = {
+  systems: {
+    systems: Array<{
+      storageVolumes: {
+        volumes: WorkloadsVolume[] | null
+      } | null
+    }>
   } | null
 }
 
 async function fetchWorkloads(
   token: string,
   systemId: string,
-  cursor?: string,
-  accumulated: WorkloadsVolume[] = [],
 ): Promise<WorkloadsSummary | null> {
-  const variables: Record<string, unknown> = { systemId, pageSize: WORKLOADS_PAGE_SIZE }
-  if (cursor) variables.after = cursor
+  const variables = { systemKey: [{ systemId }] }
 
   const requestBody = { query: WORKLOADS_QUERY, variables }
   console.log('Workloads request:', requestBody)
@@ -1017,7 +1040,7 @@ async function fetchWorkloads(
     return null
   }
 
-  const payload = (await response.json()) as GraphQlResponse<WorkloadsPageData>
+  const payload = (await response.json()) as GraphQlResponse<StorageVolumesPageData>
   console.log('Workloads response:', payload)
 
   if (payload.errors && payload.errors.length > 0) {
@@ -1025,20 +1048,15 @@ async function fetchWorkloads(
     return null
   }
 
-  const page = payload.data?.workloads
-  const volumes = [...accumulated, ...(page?.volumes ?? [])]
-  const totalCount = page?.totalCount ?? 0
-  const nextCursor = page?.cursor ?? null
-
-  if (nextCursor && volumes.length < totalCount) {
-    console.log(`Workloads: fetched ${volumes.length} of ${totalCount}, fetching next page...`)
-    return fetchWorkloads(token, systemId, nextCursor, volumes)
-  }
-
-  console.log(`Workloads: fetched all ${volumes.length} volumes`)
-  const totalUsedKiB = volumes.reduce((sum, v) => sum + (v.capacity?.usedKiB ?? 0), 0)
+  const volumes = payload.data?.systems?.systems[0]?.storageVolumes?.volumes ?? []
+  console.log(`Fetched ${volumes.length} storage volumes`)
+  const totalUsedKB = volumes.reduce((sum, v) => sum + (v.capacity?.usedKB ?? 0), 0)
+  const totalSnapshotsKiB = volumes.reduce(
+    (sum, v) => sum + (v.capacity?.logical?.usedSnapshotsKiB ?? 0),
+    0,
+  )
   const totalSizeKB = volumes.reduce((sum, v) => sum + (v.capacity?.sizeKB ?? 0), 0)
-  return { totalUsedKiB, totalSizeKB }
+  return { totalUsedKB, totalSnapshotsKiB, totalSizeKB }
 }
 
 async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
@@ -1741,21 +1759,30 @@ function NodeInfo({
           const tib = kib / 1024 ** 3
           return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
         }
-        // sizeKB is in KB; convert to KiB for consistent display
-        const sizeKiB = workloads.totalSizeKB * 1000 / 1024
-        const usedPercent = sizeKiB > 0 ? (workloads.totalUsedKiB / sizeKiB) * 100 : 0
+        const usage = getVolumeUsage(workloads)
         const getUsedColor = (pct: number) => pct >= 90 ? 'red' : pct >= 75 ? 'orange' : 'green'
+        const snapshotPercent = Math.min(
+          usage.snapshotUsedPercent,
+          Math.max(0, 100 - usage.actualUsedPercent),
+        )
         return (
           <Stack gap={4}>
             <Text size="xs" fw={500}>Volumes</Text>
             <Text size="xs" c="dimmed">
-              {fmt(workloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPercent.toFixed(1)}%)
+              {fmt(usage.actualUsedKiB)} actual + {fmt(workloads.totalSnapshotsKiB)} snapshots / {fmt(usage.totalSizeKiB)}
             </Text>
-            <Progress
-              size="sm"
-              value={usedPercent}
-              color={getUsedColor(usedPercent)}
-            />
+            <Tooltip.Group openDelay={300} closeDelay={100}>
+              <Progress.Root size="sm">
+                <Tooltip label={`Actual used: ${fmt(usage.actualUsedKiB)}`}>
+                  <Progress.Section value={usage.actualUsedPercent} color={getUsedColor(usage.actualUsedPercent)} />
+                </Tooltip>
+                {snapshotPercent > 0 ? (
+                  <Tooltip label={`Snapshots: ${fmt(workloads.totalSnapshotsKiB)}`}>
+                    <Progress.Section value={snapshotPercent} color="violet" />
+                  </Tooltip>
+                ) : null}
+              </Progress.Root>
+            </Tooltip.Group>
           </Stack>
         )
       })() : null}
@@ -3589,11 +3616,12 @@ function App() {
                               (acc, node) => {
                                 const w = node.systemId ? workloadsData.get(node.systemId) : null
                                 return {
-                                  totalUsedKiB: acc.totalUsedKiB + (w?.totalUsedKiB ?? 0),
+                                  totalUsedKB: acc.totalUsedKB + (w?.totalUsedKB ?? 0),
+                                  totalSnapshotsKiB: acc.totalSnapshotsKiB + (w?.totalSnapshotsKiB ?? 0),
                                   totalSizeKB: acc.totalSizeKB + (w?.totalSizeKB ?? 0),
                                 }
                               },
-                              { totalUsedKiB: 0, totalSizeKB: 0 },
+                              { totalUsedKB: 0, totalSnapshotsKiB: 0, totalSizeKB: 0 },
                             )
                             const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
                             return (
@@ -3611,16 +3639,30 @@ function App() {
                                       const tib = kib / 1024 ** 3
                                       return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
                                     }
-                                    const sizeKiB = aggWorkloads.totalSizeKB * 1000 / 1024
-                                    const usedPct = sizeKiB > 0 ? (aggWorkloads.totalUsedKiB / sizeKiB) * 100 : 0
-                                    const usedColor = usedPct >= 90 ? 'red' : usedPct >= 75 ? 'orange' : 'green'
+                                    const usage = getVolumeUsage(aggWorkloads)
+                                    const usedColor = usage.actualUsedPercent >= 90 ? 'red' : usage.actualUsedPercent >= 75 ? 'orange' : 'green'
+                                    const snapshotPercent = Math.min(
+                                      usage.snapshotUsedPercent,
+                                      Math.max(0, 100 - usage.actualUsedPercent),
+                                    )
                                     return (
                                       <Stack gap={4}>
                                         <Text fw={500} size="sm">Volumes</Text>
                                         <Text size="xs" c="dimmed">
-                                          {fmt(aggWorkloads.totalUsedKiB)} / {fmt(sizeKiB)} ({usedPct.toFixed(1)}%)
+                                          {fmt(usage.actualUsedKiB)} actual + {fmt(aggWorkloads.totalSnapshotsKiB)} snapshots / {fmt(usage.totalSizeKiB)}
                                         </Text>
-                                        <Progress size="sm" value={usedPct} color={usedColor} />
+                                        <Tooltip.Group openDelay={300} closeDelay={100}>
+                                          <Progress.Root size="sm">
+                                            <Tooltip label={`Actual used: ${fmt(usage.actualUsedKiB)}`}>
+                                              <Progress.Section value={usage.actualUsedPercent} color={usedColor} />
+                                            </Tooltip>
+                                            {snapshotPercent > 0 ? (
+                                              <Tooltip label={`Snapshots: ${fmt(aggWorkloads.totalSnapshotsKiB)}`}>
+                                                <Progress.Section value={snapshotPercent} color="violet" />
+                                              </Tooltip>
+                                            ) : null}
+                                          </Progress.Root>
+                                        </Tooltip.Group>
                                       </Stack>
                                     )
                                   })() : null}
