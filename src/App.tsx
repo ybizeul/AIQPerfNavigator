@@ -63,6 +63,19 @@ const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken
 const PERFORMANCE_API_URL = 'https://api.activeiq.netapp.com/v1/performance-data/graphs'
 const PAGE_SIZE = 100
 
+const TAB_VALUES = ['search', 'saved', 'performance', 'capacity', 'customers'] as const
+type TabValue = (typeof TAB_VALUES)[number]
+const DEFAULT_TAB: TabValue = 'search'
+
+function isTabValue(value: string | null): value is TabValue {
+  return TAB_VALUES.includes(value as TabValue)
+}
+
+function getTabFromLocation(): TabValue {
+  const pathTab = window.location.pathname.split('/').filter(Boolean)[0] ?? null
+  return isTabValue(pathTab) ? pathTab : DEFAULT_TAB
+}
+
 const SYSTEMS_FIELDS = `
         __typename
         systemId
@@ -1950,6 +1963,7 @@ function App() {
     key: 'aiq-system-organizer-nagp-mappings',
     defaultValue: {},
   })
+  const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
   const [results, setResults] = useState<SearchResultState>({
@@ -1984,6 +1998,22 @@ function App() {
   const [capacityTagFilter, setCapacityTagFilter] = useState<string[]>([])
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
+
+  useEffect(() => {
+    const handlePopState = () => setActiveTab(getTabFromLocation())
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  function handleTabChange(value: string | null) {
+    if (!isTabValue(value)) {
+      return
+    }
+    setActiveTab(value)
+    const url = new URL(window.location.href)
+    url.pathname = `/${value}`
+    window.history.pushState(null, '', url)
+  }
 
   useEffect(() => {
     const normalizedPairs = savedPairs.map((pair) => {
@@ -2686,7 +2716,7 @@ function App() {
           {refreshToken && (
           <Container size="xl">
             <Stack gap="lg">
-              <Tabs defaultValue="search" keepMounted={false}>
+              <Tabs value={activeTab} onChange={handleTabChange} keepMounted={false}>
                 <Tabs.List>
                   <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
                     Search
