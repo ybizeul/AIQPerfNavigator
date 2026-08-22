@@ -1898,6 +1898,75 @@ function VolumesTable({
   )
 }
 
+function VolumeSummarySkeleton({ size = 'xs' }: { size?: 'xs' | 'sm' }) {
+  const isSmall = size === 'xs'
+  return (
+    <Stack gap={4}>
+      <Skeleton h={isSmall ? 10 : 12} w={60} radius="sm" />
+      <Skeleton h={isSmall ? 9 : 10} w="80%" radius="sm" />
+      <Skeleton h={isSmall ? 6 : 8} radius="xl" />
+    </Stack>
+  )
+}
+
+function VolumesTableSkeleton({
+  rows = 5,
+  showNodeColumn = false,
+}: {
+  rows?: number
+  showNodeColumn?: boolean
+}) {
+  return (
+    <Table verticalSpacing="xs">
+      <Table.Thead>
+        <Table.Tr>
+          {showNodeColumn ? <Table.Th>Node</Table.Th> : null}
+          <Table.Th>Volume</Table.Th>
+          <Table.Th>Features</Table.Th>
+          <Table.Th>Used / snapshots</Table.Th>
+        </Table.Tr>
+      </Table.Thead>
+      <Table.Tbody>
+        {Array.from({ length: rows }, (_, index) => (
+          <Table.Tr key={index}>
+            {showNodeColumn ? (
+              <Table.Td>
+                <Skeleton h={10} w={110} radius="sm" />
+              </Table.Td>
+            ) : null}
+            <Table.Td>
+              <Skeleton h={10} w={150} radius="sm" />
+            </Table.Td>
+            <Table.Td>
+              <Group gap={6} wrap="nowrap">
+                <Skeleton h={16} w={16} circle />
+                <Skeleton h={16} w={16} circle />
+              </Group>
+            </Table.Td>
+            <Table.Td style={{ minWidth: 220 }}>
+              <Stack gap={2}>
+                <Skeleton h={9} w="70%" radius="sm" />
+                <Skeleton h={8} radius="xl" />
+              </Stack>
+            </Table.Td>
+          </Table.Tr>
+        ))}
+      </Table.Tbody>
+    </Table>
+  )
+}
+
+function VolumesPanelSkeleton({ showNodeColumn = false }: { showNodeColumn?: boolean }) {
+  return (
+    <Paper withBorder radius="lg" p="md">
+      <Stack gap="sm">
+        <Skeleton h={16} w={120} radius="sm" />
+        <VolumesTableSkeleton showNodeColumn={showNodeColumn} />
+      </Stack>
+    </Paper>
+  )
+}
+
 function NodeInfo({
   node,
   label,
@@ -1941,12 +2010,7 @@ function NodeInfo({
       ) : (
         <Text size="xs" c="dimmed">No capacity data</Text>
       )}
-      {workloadsLoading ? (
-        <Stack gap={4}>
-          <Text size="xs" fw={500} c="blue">Loading volume data...</Text>
-          <Skeleton h={6} radius="xl" />
-        </Stack>
-      ) : workloads ? (() => {
+      {workloads ? (() => {
         const fmt = (kib: number) => {
           const tib = kib / 1024 ** 3
           return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
@@ -1977,7 +2041,9 @@ function NodeInfo({
             </Tooltip.Group>
           </Stack>
         )
-      })() : null}
+      })() : workloadsLoading ? (
+        <VolumeSummarySkeleton />
+      ) : null}
     </Stack>
   )
 }
@@ -2121,10 +2187,12 @@ function App() {
   const [token, setToken] = useLocalStorage({
     key: 'aiq-system-organizer-token',
     defaultValue: '',
+    getInitialValueInEffect: false,
   })
   const [refreshToken, setRefreshToken] = useLocalStorage({
     key: 'aiq-system-organizer-refresh-token',
     defaultValue: '',
+    getInitialValueInEffect: false,
   })
   const [draftRefreshToken, setDraftRefreshToken] = useState(refreshToken)
   const [savedPairs, setSavedPairs] = useLocalStorage<SavedHAPair[]>({
@@ -2178,6 +2246,41 @@ function App() {
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
   const hasRestoredSelection = useRef(false)
+
+  const tokenRef = useRef(token)
+  const pendingTokenRequestRef = useRef<Promise<string> | null>(null)
+
+  useEffect(() => {
+    tokenRef.current = token
+  }, [token])
+
+  // Concurrent callers join the pending request instead of each asking the API for its own token.
+  const requestAccessToken = () => {
+    if (!refreshToken) {
+      return Promise.reject(new Error('No refresh token configured.'))
+    }
+    if (!pendingTokenRequestRef.current) {
+      pendingTokenRequestRef.current = (async () => {
+        try {
+          const newToken = await refreshAccessToken(refreshToken)
+          tokenRef.current = newToken
+          setToken(newToken)
+          return newToken
+        } finally {
+          pendingTokenRequestRef.current = null
+        }
+      })()
+    }
+    return pendingTokenRequestRef.current
+  }
+
+  const getAccessToken = async () => tokenRef.current || requestAccessToken()
+
+  // Another caller may have already replaced the token that failed; reuse theirs when so.
+  const renewAccessToken = async (failedToken: string) => {
+    if (tokenRef.current && tokenRef.current !== failedToken) return tokenRef.current
+    return requestAccessToken()
+  }
 
   useEffect(() => {
     const handlePopState = () => setActiveTab(getTabFromLocation())
@@ -2331,6 +2434,7 @@ function App() {
     // Clean token - remove all whitespace including newlines
     setRefreshToken(draftRefreshToken.replace(/\s/g, ''))
     // Clear any existing access token - it will be fetched when needed
+    tokenRef.current = ''
     setToken('')
     closeTokenModal()
   }
@@ -2408,20 +2512,16 @@ function App() {
       return
     }
 
-    // Get a fresh access token if we don't have one
-    let accessToken = token
-    if (!accessToken) {
-      try {
-        accessToken = await refreshAccessToken(refreshToken)
-        setToken(accessToken)
-      } catch (error) {
-        setSearchError(
-          error instanceof Error
-            ? `Failed to get access token: ${error.message}`
-            : 'Failed to get access token.',
-        )
-        return
-      }
+    let accessToken: string
+    try {
+      accessToken = await getAccessToken()
+    } catch (error) {
+      setSearchError(
+        error instanceof Error
+          ? `Failed to get access token: ${error.message}`
+          : 'Failed to get access token.',
+      )
+      return
     }
 
     setIsLoading(true)
@@ -2442,10 +2542,7 @@ function App() {
       
       if (isTokenExpired) {
         try {
-          console.log('Token expired, refreshing...')
-          const newAccessToken = await refreshAccessToken(refreshToken)
-          setToken(newAccessToken)
-          console.log('Token refreshed, retrying search...')
+          const newAccessToken = await renewAccessToken(accessToken)
           
           const nextResults = await searchSystems(newAccessToken, searchForm)
           setResults(nextResults)
@@ -2478,14 +2575,11 @@ function App() {
 
     // If partner not in search results, try to fetch it
     if (!node2 && pair.node1.partner?.serialNumber) {
-      let accessToken = token
-      if (!accessToken) {
-        try {
-          accessToken = await refreshAccessToken(refreshToken)
-          setToken(accessToken)
-        } catch {
-          // Continue without fetching partner
-        }
+      let accessToken = ''
+      try {
+        accessToken = await getAccessToken()
+      } catch {
+        // Continue without fetching partner
       }
       if (accessToken) {
         try {
@@ -2553,6 +2647,11 @@ function App() {
     setPerformanceData(new Map())
   }
 
+  // A capacity refresh fetches the token and systems before volumes start loading, so treat the
+  // whole refresh as pending to keep the volume skeletons on screen from the first render.
+  const isNodeWorkloadsLoading = (pairKey: string, systemId?: string | null) =>
+    refreshingCapacity.has(pairKey) || (systemId ? workloadsLoading.has(systemId) : false)
+
   const loadWorkloadsIfNeeded = async (accessToken: string, systemId: string) => {
     if (workloadsData.has(systemId) || workloadsLoadingRef.current.has(systemId)) return
 
@@ -2607,11 +2706,7 @@ function App() {
     }
 
     try {
-      let accessToken = token
-      if (!accessToken) {
-        accessToken = await refreshAccessToken(refreshToken)
-        setToken(accessToken)
-      }
+      const accessToken = await getAccessToken()
 
       try {
         await doFetch(accessToken)
@@ -2623,8 +2718,7 @@ function App() {
           msg.toLowerCase().includes('expired token')
 
         if (isExpired) {
-          const newToken = await refreshAccessToken(refreshToken)
-          setToken(newToken)
+          const newToken = await renewAccessToken(accessToken)
           await doFetch(newToken)
         } else {
           throw error
@@ -2647,20 +2741,16 @@ function App() {
       return
     }
 
-    // Get a fresh access token if we don't have one
-    let accessToken = token
-    if (!accessToken) {
-      try {
-        accessToken = await refreshAccessToken(refreshToken)
-        setToken(accessToken)
-      } catch (error) {
-        setPerformanceError(
-          error instanceof Error
-            ? `Failed to get access token: ${error.message}`
-            : 'Failed to get access token.',
-        )
-        return
-      }
+    let accessToken: string
+    try {
+      accessToken = await getAccessToken()
+    } catch (error) {
+      setPerformanceError(
+        error instanceof Error
+          ? `Failed to get access token: ${error.message}`
+          : 'Failed to get access token.',
+      )
+      return
     }
 
     const cacheKey = `${node.serialNumber}::${graphName}`
@@ -2702,8 +2792,7 @@ function App() {
 
       if (isTokenExpired) {
         try {
-          const newAccessToken = await refreshAccessToken(refreshToken)
-          setToken(newAccessToken)
+          const newAccessToken = await renewAccessToken(accessToken)
 
           const data = await fetchPerformanceData(
             newAccessToken,
@@ -2891,6 +2980,7 @@ function App() {
                   variant="default"
                   color="red"
                   onClick={() => {
+                    tokenRef.current = ''
                     setToken('')
                     setRefreshToken('')
                     setDraftRefreshToken('')
@@ -3274,8 +3364,8 @@ function App() {
                                       isRefreshing={refreshingCapacity.has(pair.key)}
                                       node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
                                       node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
-                                      node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
-                                      node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
+                                      node1WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node1.systemId)}
+                                      node2WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node2?.systemId)}
                                       tagsEditor={
                                         <TagsEditor
                                           value={pair.tags}
@@ -3951,6 +4041,9 @@ function App() {
                             if (!pair) return null
                             const node1Workloads = pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null
                             const node2Workloads = pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null
+                            const areWorkloadsLoading =
+                              isNodeWorkloadsLoading(pair.key, pair.node1.systemId) ||
+                              isNodeWorkloadsLoading(pair.key, pair.node2?.systemId)
                             const volumeRows = [
                               ...(node1Workloads?.volumes ?? []).map((volume) => ({
                                 nodeLabel: pair.node1.hostName || pair.node1.serialNumber,
@@ -3969,8 +4062,8 @@ function App() {
                                   isRefreshing={refreshingCapacity.has(pair.key)}
                                   node1Workloads={node1Workloads}
                                   node2Workloads={node2Workloads}
-                                  node1WorkloadsLoading={pair.node1.systemId ? workloadsLoading.has(pair.node1.systemId) : false}
-                                  node2WorkloadsLoading={pair.node2?.systemId ? workloadsLoading.has(pair.node2.systemId) : false}
+                                  node1WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node1.systemId)}
+                                  node2WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node2?.systemId)}
                                   tagsEditor={
                                     <TagsEditor
                                       value={pair.tags}
@@ -3986,6 +4079,8 @@ function App() {
                                       <VolumesTable volumes={volumeRows} />
                                     </Stack>
                                   </Paper>
+                                ) : areWorkloadsLoading ? (
+                                  <VolumesPanelSkeleton showNodeColumn={Boolean(pair.node2)} />
                                 ) : null}
                               </Stack>
                             )
@@ -4020,7 +4115,11 @@ function App() {
                               { totalUsedKB: 0, totalSnapshotsKiB: 0, totalSizeKB: 0 },
                             )
                             const hasWorkloads = nodes.some((n) => n.systemId && workloadsData.has(n.systemId))
-                            const areWorkloadsLoading = nodes.some((n) => n.systemId && workloadsLoading.has(n.systemId))
+                            const areWorkloadsLoading = selectedPairs.some(
+                              (p) =>
+                                isNodeWorkloadsLoading(p.key, p.node1.systemId) ||
+                                isNodeWorkloadsLoading(p.key, p.node2?.systemId),
+                            )
                             const volumeRows = nodes.flatMap((node) => {
                               const w = node.systemId ? workloadsData.get(node.systemId) : null
                               return (w?.volumes ?? []).map((volume) => ({
@@ -4039,12 +4138,7 @@ function App() {
                                     </Text>
                                   </div>
                                   <CapacityGauge capacity={agg} />
-                                  {areWorkloadsLoading ? (
-                                    <Stack gap={4}>
-                                      <Text size="sm" fw={500} c="blue">Loading volume data...</Text>
-                                      <Skeleton h={8} radius="xl" />
-                                    </Stack>
-                                  ) : hasWorkloads ? (() => {
+                                  {hasWorkloads ? (() => {
                                     const fmt = (kib: number) => {
                                       const tib = kib / 1024 ** 3
                                       return tib >= 1 ? `${tib.toFixed(1)} TiB` : `${(kib / 1024 ** 2).toFixed(1)} GiB`
@@ -4075,7 +4169,9 @@ function App() {
                                         </Tooltip.Group>
                                       </Stack>
                                     )
-                                  })() : null}
+                                  })() : areWorkloadsLoading ? (
+                                    <VolumeSummarySkeleton size="sm" />
+                                  ) : null}
                                 </Stack>
                               </Paper>
                               {volumeRows.length > 0 ? (
@@ -4085,6 +4181,8 @@ function App() {
                                     <VolumesTable volumes={volumeRows} />
                                   </Stack>
                                 </Paper>
+                              ) : areWorkloadsLoading ? (
+                                <VolumesPanelSkeleton showNodeColumn />
                               ) : null}
                               </Stack>
                             )
