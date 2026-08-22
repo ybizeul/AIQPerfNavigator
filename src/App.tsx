@@ -10,7 +10,6 @@ import {
   Button,
   Card,
   Checkbox,
-  Combobox,
   Container,
   Divider,
   Group,
@@ -23,7 +22,6 @@ import {
   Paper,
   PasswordInput,
   Pill,
-  PillsInput,
   Popover,
   Progress,
   ScrollArea,
@@ -34,13 +32,13 @@ import {
   Switch,
   Table,
   Tabs,
+  TagsInput,
   Text,
   TextInput,
   ThemeIcon,
   Title,
   Tooltip,
   useComputedColorScheme,
-  useCombobox,
   useMantineColorScheme,
 } from '@mantine/core'
 import { AreaChart } from '@mantine/charts'
@@ -1627,62 +1625,20 @@ function TagsEditor({
   onChange: (value: string[]) => void
   allTags: string[]
 }) {
-  const [search, setSearch] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const combobox = useCombobox({
-    onDropdownClose: () => {
-      combobox.resetSelectedOption()
-      setSearch('')
-    },
-  })
 
   const automaticTags = value.filter(isAutomaticTag)
   const manualTags = value.filter((tag) => !isAutomaticTag(tag))
   const availableTags = allTags.filter((tag) => !isAutomaticTag(tag))
 
-  const handleValueSelect = (val: string) => {
-    const normalized = val.trim()
-    if (!normalized) {
-      setSearch('')
-      return
-    }
-    if (isAutomaticTag(normalized)) {
-      setError('Tags starting with "_" are reserved for automatic model tags.')
-      return
-    }
-    if (!manualTags.includes(normalized)) {
-      onChange(normalizeTags([...manualTags, normalized], automaticTags))
-    }
-    setError(null)
-    setSearch('')
-  }
-
-  const handleValueRemove = (val: string) => {
-    onChange(normalizeTags(manualTags.filter((tag) => tag !== val), automaticTags))
-  }
-
-  const filteredOptions = availableTags
-    .filter(
-      (tag) =>
-        !manualTags.includes(tag) &&
-        getTagLabel(tag).toLowerCase().includes(search.toLowerCase()),
+  const handleChange = (nextTags: string[]) => {
+    setError(
+      nextTags.some((tag) => isAutomaticTag(tag.trim()))
+        ? 'Tags starting with "_" are reserved for automatic model tags.'
+        : null,
     )
-    .map((tag) => (
-      <Combobox.Option value={tag} key={tag}>
-        {getTagLabel(tag)}
-      </Combobox.Option>
-    ))
-
-  const manualTagPills = manualTags.map((item) => (
-    <Pill 
-      key={item} 
-      color={getTagColor(item)}
-      withRemoveButton 
-      onRemove={() => handleValueRemove(item)}
-    >
-      {getTagLabel(item)}
-    </Pill>
-  ))
+    onChange(normalizeTags(nextTags, automaticTags))
+  }
 
   const automaticTagPills = automaticTags.map((item) => (
     <Pill key={item} color={getTagColor(item)}>
@@ -1699,51 +1655,13 @@ function TagsEditor({
           </Group>
         ) : null}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <Combobox store={combobox} onOptionSubmit={handleValueSelect}>
-            <Combobox.Target>
-              <PillsInput
-                onClick={() => combobox.openDropdown()}
-                pointer
-              >
-                <Pill.Group>
-                  {manualTagPills}
-                  <Combobox.EventsTarget>
-                    <PillsInput.Field
-                      placeholder="Add tags"
-                      value={search}
-                      onChange={(event) => {
-                        setError(null)
-                        setSearch(event.currentTarget.value)
-                        combobox.openDropdown()
-                        combobox.updateSelectedOptionIndex()
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' && search.trim()) {
-                          event.preventDefault()
-                          handleValueSelect(search)
-                        } else if (
-                          event.key === 'Backspace' &&
-                          search.length === 0 &&
-                          manualTags.length > 0
-                        ) {
-                          event.preventDefault()
-                          handleValueRemove(manualTags[manualTags.length - 1])
-                        }
-                      }}
-                      onFocus={() => combobox.openDropdown()}
-                      onBlur={() => combobox.closeDropdown()}
-                    />
-                  </Combobox.EventsTarget>
-                </Pill.Group>
-              </PillsInput>
-            </Combobox.Target>
-
-            <Combobox.Dropdown>
-              <Combobox.Options>
-                {filteredOptions.length > 0 ? filteredOptions : <Combobox.Empty>No tags found</Combobox.Empty>}
-              </Combobox.Options>
-            </Combobox.Dropdown>
-          </Combobox>
+          <TagsInput
+            placeholder="Pick tag from list"
+            data={availableTags}
+            value={manualTags}
+            onChange={handleChange}
+            clearable
+          />
         </div>
       </div>
       {error ? <Text size="xs" c="red">{error}</Text> : null}
@@ -3708,6 +3626,7 @@ function App() {
                               onChange={handleMetricsTagFilterChange}
                               clearable
                               searchable
+                              withAlignedLabels
                               nothingFoundMessage="No tags"
                               leftSection={<IconTag size={12} />}
                             />
@@ -4222,6 +4141,7 @@ function App() {
                               onChange={handleMetricsTagFilterChange}
                               clearable
                               searchable
+                              withAlignedLabels
                               nothingFoundMessage="No tags"
                               leftSection={<IconTag size={12} />}
                             />
