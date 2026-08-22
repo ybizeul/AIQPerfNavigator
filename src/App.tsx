@@ -14,6 +14,7 @@ import {
   Divider,
   Group,
   Indicator,
+  Menu,
   Modal,
   MultiSelect,
   NavLink,
@@ -47,8 +48,11 @@ import {
   IconBuilding,
   IconChartLine,
   IconCheck,
+  IconCloud,
   IconDatabase,
+  IconDownload,
   IconKey,
+  IconLock,
   IconMoon,
   IconPlus,
   IconRefresh,
@@ -56,6 +60,7 @@ import {
   IconSun,
   IconTag,
   IconTrash,
+  IconUpload,
   IconX,
 } from '@tabler/icons-react'
 
@@ -63,6 +68,39 @@ const API_URL = 'https://gql.aiq.netapp.com/graphql'
 const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken'
 const PERFORMANCE_API_URL = 'https://api.activeiq.netapp.com/v1/performance-data/graphs'
 const PAGE_SIZE = 100
+const BROWSER_DATA_FILENAME = 'aiqperfnav.aiq'
+const BROWSER_DATA_FORMAT = 'aiq-perf-navigator-browser-data'
+const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
+const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
+
+type BrowserDataExport = {
+  format: typeof BROWSER_DATA_FORMAT
+  version: 1
+  exportedAt: string
+  data: Record<string, string>
+}
+
+function isBrowserDataKey(key: string) {
+  return key.startsWith(BROWSER_DATA_PREFIX) || key === COLOR_SCHEME_STORAGE_KEY
+}
+
+function isBrowserDataExport(value: unknown): value is BrowserDataExport {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as Partial<BrowserDataExport>
+  return (
+    candidate.format === BROWSER_DATA_FORMAT &&
+    candidate.version === 1 &&
+    typeof candidate.exportedAt === 'string' &&
+    !!candidate.data &&
+    typeof candidate.data === 'object' &&
+    Object.entries(candidate.data).every(
+      ([key, storedValue]) => isBrowserDataKey(key) && typeof storedValue === 'string',
+    )
+  )
+}
 
 const TAB_VALUES = ['search', 'saved', 'performance', 'capacity', 'customers'] as const
 type TabValue = (typeof TAB_VALUES)[number]
@@ -311,6 +349,9 @@ type VolumeCapacityBase = {
 
 type VolumeDetail = VolumeCapacityBase & {
   name: string
+  isEncrypted: boolean | null
+  snapLockMode: string | null
+  tieringPolicy: string | null
 }
 
 type WorkloadsSummary = VolumeCapacityBase & {
@@ -1002,6 +1043,9 @@ const WORKLOADS_QUERY = `
           storageVolumes {
             volumes {
               name
+              isEncrypted
+              snapLockMode
+              tieringPolicy
               capacity {
                 sizeKB
                 usedKB
@@ -1019,6 +1063,9 @@ const WORKLOADS_QUERY = `
 
 type WorkloadsVolume = {
   name: string | null
+  isEncrypted: boolean | null
+  snapLockMode: string | null
+  tieringPolicy: string | null
   capacity: {
     sizeKB: number | null
     usedKB: number | null
@@ -1082,6 +1129,9 @@ async function fetchWorkloads(
   const totalSizeKB = volumes.reduce((sum, v) => sum + (v.capacity?.sizeKB ?? 0), 0)
   const volumeDetails: VolumeDetail[] = volumes.map((v) => ({
     name: v.name ?? 'Unnamed volume',
+    isEncrypted: v.isEncrypted,
+    snapLockMode: v.snapLockMode,
+    tieringPolicy: v.tieringPolicy,
     totalUsedKB: v.capacity?.usedKB ?? 0,
     totalSnapshotsKiB: v.capacity?.logical?.usedSnapshotsKiB ?? 0,
     totalSizeKB: v.capacity?.sizeKB ?? 0,
@@ -1791,6 +1841,7 @@ function VolumesTable({
         <Table.Tr>
           {showNodeColumn ? <Table.Th>Node</Table.Th> : null}
           <Table.Th>Volume</Table.Th>
+          <Table.Th>Features</Table.Th>
           <Table.Th>Used / snapshots</Table.Th>
         </Table.Tr>
       </Table.Thead>
@@ -1804,6 +1855,25 @@ function VolumesTable({
             ) : null}
             <Table.Td>
               <Text size="xs" fw={500}>{volume.name}</Text>
+            </Table.Td>
+            <Table.Td>
+              <Group gap={6} wrap="nowrap">
+                {volume.isEncrypted ? (
+                  <Tooltip label="Encryption enabled">
+                    <IconKey size={16} aria-label="Encryption enabled" />
+                  </Tooltip>
+                ) : null}
+                {volume.snapLockMode && volume.snapLockMode !== 'NON_SNAPLOCK' ? (
+                  <Tooltip label={`SnapLock: ${volume.snapLockMode}`}>
+                    <IconLock size={16} aria-label={`SnapLock: ${volume.snapLockMode}`} />
+                  </Tooltip>
+                ) : null}
+                {volume.tieringPolicy && volume.tieringPolicy !== 'NONE' ? (
+                  <Tooltip label={`Tiering: ${volume.tieringPolicy}`}>
+                    <IconCloud size={16} aria-label={`Tiering: ${volume.tieringPolicy}`} />
+                  </Tooltip>
+                ) : null}
+              </Group>
             </Table.Td>
             <Table.Td style={{ minWidth: 220 }}>
               <VolumeGauge volume={volume} />
@@ -2035,6 +2105,8 @@ function App() {
   const isDarkMode = computedColorScheme === 'dark'
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
+  const browserDataInputRef = useRef<HTMLInputElement>(null)
+  const [browserDataError, setBrowserDataError] = useState<string | null>(null)
   const [token, setToken] = useLocalStorage({
     key: 'aiq-system-organizer-token',
     defaultValue: '',
@@ -2248,6 +2320,63 @@ function App() {
     // Clear any existing access token - it will be fetched when needed
     setToken('')
     closeTokenModal()
+  }
+
+  const handleBrowserDataExport = () => {
+    const data = Object.fromEntries(
+      Array.from({ length: window.localStorage.length }, (_, index) => {
+        const key = window.localStorage.key(index)
+        return key && isBrowserDataKey(key) ? [key, window.localStorage.getItem(key) ?? ''] : null
+      }).filter((entry): entry is [string, string] => entry !== null),
+    )
+    const browserData: BrowserDataExport = {
+      format: BROWSER_DATA_FORMAT,
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      data,
+    }
+    const downloadUrl = URL.createObjectURL(
+      new Blob([JSON.stringify(browserData, null, 2)], { type: 'application/json' }),
+    )
+    const downloadLink = document.createElement('a')
+    downloadLink.href = downloadUrl
+    downloadLink.download = BROWSER_DATA_FILENAME
+    downloadLink.click()
+    URL.revokeObjectURL(downloadUrl)
+  }
+
+  const handleBrowserDataImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) {
+      return
+    }
+
+    try {
+      const parsedData: unknown = JSON.parse(await file.text())
+      if (!isBrowserDataExport(parsedData)) {
+        throw new Error('The selected file is not a valid AIQ Perf Navigator backup.')
+      }
+
+      const shouldImport = window.confirm(
+        'Importing this backup will replace browser data, including saved systems and tokens. Continue?',
+      )
+      if (!shouldImport) {
+        return
+      }
+
+      Object.keys(window.localStorage)
+        .filter(isBrowserDataKey)
+        .forEach((key) => window.localStorage.removeItem(key))
+      Object.entries(parsedData.data).forEach(([key, value]) => {
+        window.localStorage.setItem(key, value)
+      })
+      window.location.reload()
+    } catch (error) {
+      setBrowserDataError(
+        error instanceof Error ? error.message : 'The browser data import failed.',
+      )
+    }
   }
 
   const handleSearch = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -2681,6 +2810,23 @@ function App() {
 
   return (
     <>
+      <input
+        ref={browserDataInputRef}
+        type="file"
+        accept=".aiq,application/json"
+        hidden
+        onChange={handleBrowserDataImport}
+      />
+      <Modal
+        opened={browserDataError !== null}
+        onClose={() => setBrowserDataError(null)}
+        title="Browser data import"
+        centered
+      >
+        <Alert color="red" title="Import failed">
+          {browserDataError}
+        </Alert>
+      </Modal>
       <Modal
         opened={tokenModalOpened}
         onClose={closeTokenModal}
@@ -2752,6 +2898,31 @@ function App() {
                 >
                   {isDarkMode ? <IconSun size={18} /> : <IconMoon size={18} />}
                 </ActionIcon>
+                <Menu position="bottom-end" shadow="md" width={210}>
+                  <Menu.Target>
+                    <ActionIcon
+                      variant="default"
+                      size="lg"
+                      aria-label="Import or export browser data"
+                    >
+                      <IconDownload size={18} />
+                    </ActionIcon>
+                  </Menu.Target>
+                  <Menu.Dropdown>
+                    <Menu.Item
+                      leftSection={<IconUpload size={16} />}
+                      onClick={() => browserDataInputRef.current?.click()}
+                    >
+                      Import browser data
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconDownload size={16} />}
+                      onClick={handleBrowserDataExport}
+                    >
+                      Export browser data
+                    </Menu.Item>
+                  </Menu.Dropdown>
+                </Menu>
                 <Indicator
                   inline
                   color={refreshToken ? 'teal' : 'gray'}
