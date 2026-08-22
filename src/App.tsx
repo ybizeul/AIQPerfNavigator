@@ -2253,6 +2253,87 @@ function NodeInfo({
   )
 }
 
+function getHardwareModelColor(modelName: string) {
+  if (modelName.includes('AFF')) return 'green'
+  if (modelName.includes('FAS')) return 'blue'
+  return 'gray'
+}
+
+function HardwareModelCornerBadge({
+  name,
+  roundedTopLeft = true,
+}: {
+  name: string
+  roundedTopLeft?: boolean
+}) {
+  return (
+    <Badge
+      size="sm"
+      color={getHardwareModelColor(name)}
+      variant="filled"
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        borderRadius: `${roundedTopLeft ? '0.375rem' : '0'} 0 0.5rem 0`,
+        paddingLeft: '0.5rem',
+        paddingRight: '0.5rem',
+        zIndex: 1,
+      }}
+    >
+      {name}
+    </Badge>
+  )
+}
+
+function PairSelectionNavLink({
+  pair,
+  selected,
+  onToggle,
+}: {
+  pair: SavedHAPair
+  selected: boolean
+  onToggle: () => void
+}) {
+  const modelName = pair.node1.hardwareModel?.name
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {modelName ? <HardwareModelCornerBadge name={modelName} roundedTopLeft={false} /> : null}
+      <NavLink
+        label={pairLabel(pair)}
+        description={
+          <Stack gap={2}>
+            <span>{pairSerialLabel(pair)}</span>
+            {pair.tags.length > 0 ? (
+              <Group gap={2}>
+                {pair.tags.map((tag) => (
+                  <Badge
+                    key={tag}
+                    size="xs"
+                    variant="filled"
+                    color={getTagColor(tag)}
+                    style={{ fontSize: 9 }}
+                  >
+                    {getTagLabel(tag)}
+                  </Badge>
+                ))}
+              </Group>
+            ) : null}
+          </Stack>
+        }
+        active={selected}
+        onClick={onToggle}
+        styles={{
+          root: {
+            paddingTop: modelName ? 20 : undefined,
+          },
+        }}
+      />
+    </div>
+  )
+}
+
 function HAPairCard({
   pair,
   action,
@@ -2278,32 +2359,10 @@ function HAPairCard({
 }) {
   const { node1, node2 } = pair
 
-  const modelColor = node1.hardwareModel?.name
-    ? node1.hardwareModel.name.includes('AFF')
-      ? 'green'
-      : node1.hardwareModel.name.includes('FAS')
-        ? 'blue'
-        : 'gray'
-    : 'gray'
-
   return (
     <Card withBorder radius="md" shadow="sm" p="sm" style={{ position: 'relative' }}>
       {node1.hardwareModel?.name ? (
-        <Badge
-          size="sm"
-          color={modelColor}
-          variant="filled"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            borderRadius: '0.375rem 0 0.5rem 0',
-            paddingLeft: '0.5rem',
-            paddingRight: '0.5rem',
-          }}
-        >
-          {node1.hardwareModel.name}
-        </Badge>
+        <HardwareModelCornerBadge name={node1.hardwareModel.name} />
       ) : null}
       
       <Stack gap="sm" pt={node1.hardwareModel?.name ? 'sm' : 0}>
@@ -3691,30 +3750,11 @@ function App() {
                                   </Button>
                                 </div>
                                 {group.pairs.map((pair) => (
-                                  <NavLink
+                                  <PairSelectionNavLink
                                     key={pair.key}
-                                    label={pairLabel(pair)}
-                                    description={
-                                      <Stack gap={2}>
-                                        <span>{pairSerialLabel(pair)}</span>
-                                        {pair.node1.hardwareModel?.name ? (
-                                          <Text size="xs" c="dimmed">
-                                            {pair.node1.hardwareModel.name}
-                                          </Text>
-                                        ) : null}
-                                        {pair.tags.length > 0 ? (
-                                          <Group gap={2}>
-                                            {pair.tags.map((tag) => (
-                                              <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {getTagLabel(tag)}
-                                              </Badge>
-                                            ))}
-                                          </Group>
-                                        ) : null}
-                                      </Stack>
-                                    }
-                                    active={selectedPairKeySet.has(pair.key)}
-                                    onClick={() => handleTogglePairSelection(pair.key)}
+                                    pair={pair}
+                                    selected={selectedPairKeySet.has(pair.key)}
+                                    onToggle={() => handleTogglePairSelection(pair.key)}
                                   />
                                 ))}
                               </div>
@@ -4202,30 +4242,11 @@ function App() {
                                   </Text>
                                 </div>
                                 {group.pairs.map((pair) => (
-                                  <NavLink
+                                  <PairSelectionNavLink
                                     key={pair.key}
-                                    label={pairLabel(pair)}
-                                    description={
-                                      <Stack gap={2}>
-                                        <span>{pairSerialLabel(pair)}</span>
-                                        {pair.node1.hardwareModel?.name ? (
-                                          <Text size="xs" c="dimmed">
-                                            {pair.node1.hardwareModel.name}
-                                          </Text>
-                                        ) : null}
-                                        {pair.tags.length > 0 ? (
-                                          <Group gap={2}>
-                                            {pair.tags.map((tag) => (
-                                              <Badge key={tag} size="xs" variant="filled" color={getTagColor(tag)} style={{ fontSize: 9 }}>
-                                                {getTagLabel(tag)}
-                                              </Badge>
-                                            ))}
-                                          </Group>
-                                        ) : null}
-                                      </Stack>
-                                    }
-                                    active={selectedPairKeySet.has(pair.key)}
-                                    onClick={() => handleTogglePairSelection(pair.key)}
+                                    pair={pair}
+                                    selected={selectedPairKeySet.has(pair.key)}
+                                    onToggle={() => handleTogglePairSelection(pair.key)}
                                   />
                                 ))}
                               </div>
