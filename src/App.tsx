@@ -2055,6 +2055,12 @@ function App() {
   const [metricsTagFilter, setMetricsTagFilter] = useLocalStorage<string[]>({
     key: 'aiq-system-organizer-metrics-tag-filter',
     defaultValue: [],
+    getInitialValueInEffect: false,
+  })
+  const [selectedPairKeys, setSelectedPairKeys] = useLocalStorage<string[]>({
+    key: 'aiq-system-organizer-metrics-selected-pairs',
+    defaultValue: [],
+    getInitialValueInEffect: false,
   })
   const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
@@ -2067,7 +2073,6 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchResultTags, setSearchResultTags] = useState<Map<string, string[]>>(new Map())
-  const [selectedPairKeys, setSelectedPairKeys] = useState<Set<string>>(new Set())
   const [performanceData, setPerformanceData] = useState<Map<string, ChartDataPoint[]>>(new Map())
   const [performanceLoading, setPerformanceLoading] = useState<Set<string>>(new Set())
   const [performanceError, setPerformanceError] = useState<string | null>(null)
@@ -2086,7 +2091,6 @@ function App() {
   const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
   const [workloadsLoading, setWorkloadsLoading] = useState<Set<string>>(new Set())
   const workloadsLoadingRef = useRef(new Set<string>())
-  const [capacitySelectedPairKeys, setCapacitySelectedPairKeys] = useState<Set<string>>(new Set())
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
 
@@ -2124,6 +2128,15 @@ function App() {
     () => new Map(savedPairs.map((pair) => [pair.key, pair])),
     [savedPairs],
   )
+  const selectedPairKeySet = useMemo(() => new Set(selectedPairKeys), [selectedPairKeys])
+
+  useEffect(() => {
+    const validKeys = new Set(savedPairs.map((pair) => pair.key))
+    const next = selectedPairKeys.filter((key) => validKeys.has(key))
+    if (next.length !== selectedPairKeys.length) {
+      setSelectedPairKeys(next)
+    }
+  }, [savedPairs, selectedPairKeys, setSelectedPairKeys])
   const allTags = useMemo(
     () =>
       Array.from(
@@ -2394,25 +2407,8 @@ function App() {
 
   const handleMetricsTagFilterChange = (value: string[]) => {
     setMetricsTagFilter(value)
-    setSelectedPairKeys(new Set())
+    setSelectedPairKeys([])
     setPerformanceData(new Map())
-    setCapacitySelectedPairKeys(new Set())
-  }
-
-  const handleCapacityPairSelection = (pairKey: string) => {
-    const isSelected = capacitySelectedPairKeys.has(pairKey)
-    if (!isSelected) {
-      void handleRefreshCapacity(pairKey)
-    }
-    setCapacitySelectedPairKeys((current) => {
-      const next = new Set(current)
-      if (next.has(pairKey)) {
-        next.delete(pairKey)
-      } else {
-        next.add(pairKey)
-      }
-      return next
-    })
   }
 
   const loadWorkloadsIfNeeded = async (accessToken: string, systemId: string) => {
@@ -2605,36 +2601,6 @@ function App() {
     }
   }
 
-  const handleTogglePairSelection = (pairKey: string) => {
-    const pair = savedPairMap.get(pairKey)
-    setSelectedPairKeys((current) => {
-      const next = new Set(current)
-      if (next.has(pairKey)) {
-        next.delete(pairKey)
-        if (pair) {
-          setPerformanceData((currentData) => {
-            const nextData = new Map(currentData)
-            for (const graph of PERFORMANCE_GRAPHS) {
-              nextData.delete(`${pair.node1.serialNumber}::${graph.name}`)
-              if (pair.node2) nextData.delete(`${pair.node2.serialNumber}::${graph.name}`)
-            }
-            return nextData
-          })
-        }
-      } else {
-        next.add(pairKey)
-        if (pair) {
-          const { startDateStr, endDateStr } = computeDateStrings()
-          for (const graph of PERFORMANCE_GRAPHS) {
-            void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
-            if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
-          }
-        }
-      }
-      return next
-    })
-  }
-
   const computeDateStrings = () => {
     const toDate = (d: Date | null) => (d ? new Date(+d) : null)
     const endDate = toDate(customEndDate) ?? new Date()
@@ -2647,8 +2613,47 @@ function App() {
     return { startDateStr: fmt(startDate), endDateStr: fmt(endDate) }
   }
 
+  const applySelectedPairKeys = (nextKeys: string[]) => {
+    const nextSet = new Set(nextKeys)
+    setSelectedPairKeys([...nextSet])
+
+    const { startDateStr, endDateStr } = computeDateStrings()
+    for (const key of nextSet) {
+      if (selectedPairKeySet.has(key)) continue
+      const pair = savedPairMap.get(key)
+      if (!pair) continue
+      void handleRefreshCapacity(key)
+      for (const graph of PERFORMANCE_GRAPHS) {
+        void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
+        if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
+      }
+    }
+
+    setPerformanceData((currentData) => {
+      const nextData = new Map(currentData)
+      for (const key of selectedPairKeys) {
+        if (nextSet.has(key)) continue
+        const pair = savedPairMap.get(key)
+        if (!pair) continue
+        for (const graph of PERFORMANCE_GRAPHS) {
+          nextData.delete(`${pair.node1.serialNumber}::${graph.name}`)
+          if (pair.node2) nextData.delete(`${pair.node2.serialNumber}::${graph.name}`)
+        }
+      }
+      return nextData
+    })
+  }
+
+  const handleTogglePairSelection = (pairKey: string) => {
+    applySelectedPairKeys(
+      selectedPairKeySet.has(pairKey)
+        ? selectedPairKeys.filter((key) => key !== pairKey)
+        : [...selectedPairKeys, pairKey],
+    )
+  }
+
   useEffect(() => {
-    if (selectedPairKeys.size === 0 || !refreshToken) return
+    if (selectedPairKeys.length === 0 || !refreshToken) return
     if ((customStartDate !== null) !== (customEndDate !== null)) return
     const { startDateStr, endDateStr } = computeDateStrings()
     if (lastFetchedDates.current?.startDateStr === startDateStr && lastFetchedDates.current?.endDateStr === endDateStr) return
@@ -2664,6 +2669,15 @@ function App() {
       }
     }
   }, [dateRange, customStartDate, customEndDate]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (selectedPairKeys.length === 0 || !refreshToken) return
+    for (const pairKey of selectedPairKeys) {
+      void handleRefreshCapacity(pairKey)
+    }
+    // Restore capacity/workloads for persisted selection on first load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   return (
     <>
@@ -3114,24 +3128,15 @@ function App() {
                                   size="compact-xs"
                                   variant="light"
                                   onClick={() => {
-                                    const allVisible = new Set(metricsVisiblePairs.map((p) => p.key))
-                                    const allSelected = metricsVisiblePairs.every((p) => selectedPairKeys.has(p.key))
-                                    if (allSelected) {
-                                      setSelectedPairKeys(new Set())
-                                      setPerformanceData(new Map())
-                                    } else {
-                                      setSelectedPairKeys(allVisible)
-                                      const { startDateStr, endDateStr } = computeDateStrings()
-                                      for (const pair of metricsVisiblePairs) {
-                                        for (const graph of PERFORMANCE_GRAPHS) {
-                                          void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
-                                          if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
-                                        }
-                                      }
-                                    }
+                                    const allSelected = metricsVisiblePairs.every((p) =>
+                                      selectedPairKeySet.has(p.key),
+                                    )
+                                    applySelectedPairKeys(
+                                      allSelected ? [] : metricsVisiblePairs.map((p) => p.key),
+                                    )
                                   }}
                                 >
-                                  {metricsVisiblePairs.every((p) => selectedPairKeys.has(p.key)) ? 'Clear' : 'Select all'}
+                                  {metricsVisiblePairs.every((p) => selectedPairKeySet.has(p.key)) ? 'Clear' : 'Select all'}
                                 </Button>
                               ) : null}
                             </Group>
@@ -3171,28 +3176,18 @@ function App() {
                                     color="gray"
                                     style={{ border: '1px solid var(--mantine-color-gray-4)' }}
                                     onClick={() => {
-                                      const clusterPairKeys = new Set(group.pairs.map((p) => p.key))
-                                      const allSelected = group.pairs.every((p) => selectedPairKeys.has(p.key))
-                                      
-                                      if (allSelected) {
-                                        // Deselect all pairs in this cluster
-                                        setSelectedPairKeys(new Set([...selectedPairKeys].filter(k => !clusterPairKeys.has(k))))
-                                      } else {
-                                        // Select all pairs in this cluster
-                                        setSelectedPairKeys(new Set([...selectedPairKeys, ...clusterPairKeys]))
-                                        const { startDateStr, endDateStr } = computeDateStrings()
-                                        for (const pair of group.pairs) {
-                                          if (!selectedPairKeys.has(pair.key)) {
-                                            for (const graph of PERFORMANCE_GRAPHS) {
-                                              void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
-                                              if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
-                                            }
-                                          }
-                                        }
-                                      }
+                                      const clusterPairKeys = group.pairs.map((p) => p.key)
+                                      const allSelected = group.pairs.every((p) =>
+                                        selectedPairKeySet.has(p.key),
+                                      )
+                                      applySelectedPairKeys(
+                                        allSelected
+                                          ? selectedPairKeys.filter((k) => !clusterPairKeys.includes(k))
+                                          : [...new Set([...selectedPairKeys, ...clusterPairKeys])],
+                                      )
                                     }}
                                   >
-                                    {group.pairs.every((p) => selectedPairKeys.has(p.key)) ? 'Clear' : 'Select All'}
+                                    {group.pairs.every((p) => selectedPairKeySet.has(p.key)) ? 'Clear' : 'Select All'}
                                   </Button>
                                 </div>
                                 {group.pairs.map((pair) => (
@@ -3218,7 +3213,7 @@ function App() {
                                         ) : null}
                                       </Stack>
                                     }
-                                    active={selectedPairKeys.has(pair.key)}
+                                    active={selectedPairKeySet.has(pair.key)}
                                     onClick={() => handleTogglePairSelection(pair.key)}
                                   />
                                 ))}
@@ -3267,7 +3262,7 @@ function App() {
                                 maxDate={new Date()}
                               />
                             </Group>
-                            {selectedPairKeys.size > 1 ? (
+                            {selectedPairKeys.length > 1 ? (
                               <Switch
                                 label="Stack"
                                 checked={stackLines}
@@ -3280,7 +3275,7 @@ function App() {
                               />
                             ) : null}
 
-                            {selectedPairKeys.size === 0 ? (
+                            {selectedPairKeys.length === 0 ? (
                               <Paper withBorder radius="lg" p="xl">
                                 <Text c="dimmed" ta="center">
                                   Select one or more HA pairs to view performance graphs
@@ -3300,7 +3295,7 @@ function App() {
                                   ) : null}
 
                                   {PERFORMANCE_GRAPHS.map((graph) => {
-                                    const isSinglePair = selectedPairKeys.size === 1
+                                    const isSinglePair = selectedPairKeys.length === 1
                                     const supportsStacking = ['node_protocol_iops', 'node_network_throughput'].includes(graph.name)
                                     const isGraphStacked = stackedGraphs[graph.name] ?? false
                                     const [singlePairKey] = selectedPairKeys
@@ -3725,8 +3720,8 @@ function App() {
                                         ) : null}
                                       </Stack>
                                     }
-                                    active={capacitySelectedPairKeys.has(pair.key)}
-                                    onClick={() => handleCapacityPairSelection(pair.key)}
+                                    active={selectedPairKeySet.has(pair.key)}
+                                    onClick={() => handleTogglePairSelection(pair.key)}
                                   />
                                 ))}
                               </div>
@@ -3735,14 +3730,14 @@ function App() {
                         </Paper>
 
                         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
-                          {capacitySelectedPairKeys.size === 0 ? (
+                          {selectedPairKeySet.size === 0 ? (
                             <Paper withBorder radius="lg" p="xl">
                               <Text c="dimmed" ta="center">
                                 Select an HA pair to view capacity details
                               </Text>
                             </Paper>
-                          ) : capacitySelectedPairKeys.size === 1 ? (() => {
-                            const [pairKey] = capacitySelectedPairKeys
+                          ) : selectedPairKeySet.size === 1 ? (() => {
+                            const [pairKey] = selectedPairKeySet
                             const pair = savedPairMap.get(pairKey)
                             if (!pair) return null
                             const node1Workloads = pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null
@@ -3786,7 +3781,7 @@ function App() {
                               </Stack>
                             )
                           })() : (() => {
-                            const selectedPairs = Array.from(capacitySelectedPairKeys)
+                            const selectedPairs = Array.from(selectedPairKeySet)
                               .map((k) => savedPairMap.get(k))
                               .filter((p): p is SavedHAPair => p !== undefined)
                             const nodes = selectedPairs.flatMap((p) =>
