@@ -2129,6 +2129,7 @@ function App() {
   const [savedPairs, setSavedPairs] = useLocalStorage<SavedHAPair[]>({
     key: 'aiq-system-organizer-pairs',
     defaultValue: [],
+    getInitialValueInEffect: false,
   })
   const [nagpMappings, setNagpMappings] = useLocalStorage<Record<string, string>>({
     key: 'aiq-system-organizer-nagp-mappings',
@@ -2175,6 +2176,7 @@ function App() {
   const workloadsLoadingRef = useRef(new Set<string>())
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
+  const hasRestoredSelection = useRef(false)
 
   useEffect(() => {
     const handlePopState = () => setActiveTab(getTabFromLocation())
@@ -2809,14 +2811,25 @@ function App() {
     }
   }, [dateRange, customStartDate, customEndDate]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The refresh token and saved pairs are read from storage after mount, so the
+  // persisted selection can only be restored once both are available.
   useEffect(() => {
-    if (selectedPairKeys.length === 0 || !refreshToken) return
+    if (hasRestoredSelection.current) return
+    if (!refreshToken || savedPairs.length === 0 || selectedPairKeys.length === 0) return
+    hasRestoredSelection.current = true
+
+    const { startDateStr, endDateStr } = computeDateStrings()
+    lastFetchedDates.current = { startDateStr, endDateStr }
     for (const pairKey of selectedPairKeys) {
+      const pair = savedPairMap.get(pairKey)
+      if (!pair) continue
       void handleRefreshCapacity(pairKey)
+      for (const graph of PERFORMANCE_GRAPHS) {
+        void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
+        if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
+      }
     }
-    // Restore capacity/workloads for persisted selection on first load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [refreshToken, savedPairs, selectedPairKeys]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
