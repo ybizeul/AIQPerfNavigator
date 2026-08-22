@@ -542,7 +542,7 @@ function CopyableText({
   }
 
   return (
-    <Group gap={4} style={{ cursor: 'pointer' }} onClick={handleCopy}>
+    <Group gap={4} wrap="nowrap" w="fit-content" style={{ cursor: 'pointer' }} onClick={handleCopy}>
       <Text fw={fw} size={size} c={copied ? 'teal' : c}>
         {children}
       </Text>
@@ -1566,9 +1566,15 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
   return (
     <Paper withBorder radius="md" p="md">
       <Stack gap="xs">
-        <Text fw={600} size="sm">
-          {clusterGroup.clusterName || 'No cluster'}
-        </Text>
+        {clusterGroup.clusterName ? (
+          <CopyableText fw={600} size="sm" textToCopy={clusterGroup.clusterName}>
+            {clusterGroup.clusterName}
+          </CopyableText>
+        ) : (
+          <Text fw={600} size="sm">
+            No cluster
+          </Text>
+        )}
         {clusterGroup.pairs.map((pair) => (
           <div key={pair.key}>
             {renderPair(pair)}
@@ -1850,11 +1856,15 @@ function VolumesTable({
           <Table.Tr key={`${nodeLabel}-${volume.name}-${index}`}>
             {showNodeColumn ? (
               <Table.Td>
-                <Text size="xs" c="dimmed">{nodeLabel}</Text>
+                <CopyableText size="xs" c="dimmed" textToCopy={nodeLabel}>
+                  {nodeLabel}
+                </CopyableText>
               </Table.Td>
             ) : null}
             <Table.Td>
-              <Text size="xs" fw={500}>{volume.name}</Text>
+              <CopyableText size="xs" fw={500} textToCopy={volume.name}>
+                {volume.name}
+              </CopyableText>
             </Table.Td>
             <Table.Td>
               <Group gap={6} wrap="nowrap">
@@ -3623,7 +3633,9 @@ function App() {
                                           {isSinglePair ? (
                                             <SimpleGrid cols={node2Label ? 2 : 1}>
                                               <Stack gap="xs">
-                                                <Text size="sm" fw={500} c="dimmed">{node1Label}</Text>
+                                                <CopyableText size="sm" fw={500} c="dimmed" textToCopy={node1Label ?? ''}>
+                                                  {node1Label}
+                                                </CopyableText>
                                                 {performanceLoading.has(`${singlePair!.node1.serialNumber}::${graph.name}`) ? (
                                                   <Skeleton h={220} />
                                                 ) : node1Data && node1Data.length > 0 ? (
@@ -3648,7 +3660,9 @@ function App() {
                                               </Stack>
                                               {node2Label ? (
                                                 <Stack gap="xs">
-                                                  <Text size="sm" fw={500} c="dimmed">{node2Label}</Text>
+                                                  <CopyableText size="sm" fw={500} c="dimmed" textToCopy={node2Label}>
+                                                    {node2Label}
+                                                  </CopyableText>
                                                   {performanceLoading.has(`${singlePair!.node2!.serialNumber}::${graph.name}`) ? (
                                                     <Skeleton h={220} />
                                                   ) : node2Data && node2Data.length > 0 ? (
