@@ -3712,7 +3712,7 @@ function App() {
                               leftSection={<IconTag size={12} />}
                             />
                           </div>
-                          <ScrollArea style={{ flex: 1 }}>
+                          <ScrollArea style={{ flex: 1 }} styles={{ scrollbar: { zIndex: 3 } }}>
                             {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{ 
@@ -3721,7 +3721,7 @@ function App() {
                                   borderBottom: '1px solid var(--mantine-color-default-border)',
                                   position: 'sticky',
                                   top: 0,
-                                  zIndex: 1,
+                                  zIndex: 2,
                                   display: 'flex',
                                   justifyContent: 'space-between',
                                   alignItems: 'center',
@@ -4226,7 +4226,7 @@ function App() {
                               leftSection={<IconTag size={12} />}
                             />
                           </div>
-                          <ScrollArea style={{ flex: 1 }}>
+                          <ScrollArea style={{ flex: 1 }} styles={{ scrollbar: { zIndex: 3 } }}>
                             {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{
@@ -4235,7 +4235,7 @@ function App() {
                                   borderBottom: '1px solid var(--mantine-color-default-border)',
                                   position: 'sticky',
                                   top: 0,
-                                  zIndex: 1,
+                                  zIndex: 2,
                                 }}>
                                   <Text size="xs" fw={600}>
                                     {group.clusterName || 'Unknown'}
