@@ -9,6 +9,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Combobox,
   Container,
   Divider,
@@ -23,6 +24,7 @@ import {
   PasswordInput,
   Pill,
   PillsInput,
+  Popover,
   Progress,
   ScrollArea,
   Select,
@@ -52,6 +54,8 @@ import {
   IconDatabase,
   IconDeviceDesktop,
   IconDownload,
+  IconFilter,
+  IconFilterFilled,
   IconKey,
   IconLock,
   IconMoon,
@@ -355,6 +359,32 @@ type VolumeDetail = VolumeCapacityBase & {
   isEncrypted: boolean | null
   snapLockMode: string | null
   tieringPolicy: string | null
+}
+
+const VOLUME_FEATURE_OPTIONS = [
+  { value: 'encrypted', label: 'Encryption' },
+  { value: 'snaplock', label: 'SnapLock' },
+  { value: 'tiering', label: 'Tiering' },
+] as const
+
+type VolumeFeatureFilter = (typeof VOLUME_FEATURE_OPTIONS)[number]['value']
+
+function volumeHasEncryption(volume: VolumeDetail) {
+  return Boolean(volume.isEncrypted)
+}
+
+function volumeHasSnapLock(volume: VolumeDetail) {
+  return Boolean(volume.snapLockMode && volume.snapLockMode !== 'NON_SNAPLOCK')
+}
+
+function volumeHasTiering(volume: VolumeDetail) {
+  return Boolean(volume.tieringPolicy && volume.tieringPolicy !== 'NONE')
+}
+
+function volumeHasFeature(volume: VolumeDetail, feature: VolumeFeatureFilter) {
+  if (feature === 'encrypted') return volumeHasEncryption(volume)
+  if (feature === 'snaplock') return volumeHasSnapLock(volume)
+  return volumeHasTiering(volume)
 }
 
 type WorkloadsSummary = VolumeCapacityBase & {
@@ -1835,66 +1865,241 @@ function VolumeGauge({ volume }: { volume: VolumeCapacityBase }) {
   )
 }
 
+function ColumnFilterHeader({
+  label,
+  isActive,
+  onClear,
+  children,
+}: {
+  label: string
+  isActive: boolean
+  onClear: () => void
+  children: ReactNode
+}) {
+  const [opened, setOpened] = useState(false)
+
+  return (
+    <Group gap={4} wrap="nowrap">
+      <span>{label}</span>
+      <Popover
+        opened={opened}
+        onChange={setOpened}
+        position="bottom-start"
+        shadow="md"
+        width={240}
+        trapFocus
+      >
+        <Popover.Target>
+          <ActionIcon
+            size="sm"
+            variant={isActive ? 'light' : 'subtle'}
+            color={isActive ? 'blue' : 'gray'}
+            onClick={() => setOpened((current) => !current)}
+            aria-label={`Filter by ${label.toLowerCase()}`}
+          >
+            {isActive ? <IconFilterFilled size={14} /> : <IconFilter size={14} />}
+          </ActionIcon>
+        </Popover.Target>
+        <Popover.Dropdown>
+          <Stack gap="xs">
+            {children}
+            <Group justify="flex-end">
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="gray"
+                onClick={onClear}
+                disabled={!isActive}
+              >
+                Clear
+              </Button>
+            </Group>
+          </Stack>
+        </Popover.Dropdown>
+      </Popover>
+    </Group>
+  )
+}
+
 function VolumesTable({
   volumes,
 }: {
   volumes: Array<{ nodeLabel: string; volume: VolumeDetail }>
 }) {
+  const [nameFilter, setNameFilter] = useState('')
+  const [selectedNodes, setSelectedNodes] = useState<string[]>([])
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([])
+
+  const nodeOptions = useMemo(() => {
+    const labels = Array.from(new Set(volumes.map((row) => row.nodeLabel))).sort((a, b) =>
+      a.localeCompare(b),
+    )
+    return labels.map((label) => ({ value: label, label }))
+  }, [volumes])
+
+  const showNodeColumn = nodeOptions.length > 1
+
+  const filteredVolumes = useMemo(() => {
+    const nameQuery = nameFilter.trim().toLowerCase()
+    return volumes.filter(({ nodeLabel, volume }) => {
+      if (nameQuery && !volume.name.toLowerCase().includes(nameQuery)) {
+        return false
+      }
+      if (selectedNodes.length > 0 && !selectedNodes.includes(nodeLabel)) {
+        return false
+      }
+      if (selectedFeatures.length > 0) {
+        const hasAnySelectedFeature = selectedFeatures.some((feature) =>
+          volumeHasFeature(volume, feature as VolumeFeatureFilter),
+        )
+        if (!hasAnySelectedFeature) return false
+      }
+      return true
+    })
+  }, [volumes, nameFilter, selectedNodes, selectedFeatures])
+
   if (volumes.length === 0) return null
 
-  const showNodeColumn = new Set(volumes.map((v) => v.nodeLabel)).size > 1
+  const isFiltered =
+    nameFilter.trim() !== '' || selectedNodes.length > 0 || selectedFeatures.length > 0
+  const countLabel = isFiltered
+    ? `Volumes (${filteredVolumes.length} of ${volumes.length})`
+    : `Volumes (${volumes.length})`
+
+  const columnCount = showNodeColumn ? 4 : 3
 
   return (
-    <Table verticalSpacing="xs" highlightOnHover>
-      <Table.Thead>
-        <Table.Tr>
-          {showNodeColumn ? <Table.Th>Node</Table.Th> : null}
-          <Table.Th>Volume</Table.Th>
-          <Table.Th>Features</Table.Th>
-          <Table.Th>Used / snapshots</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {volumes.map(({ nodeLabel, volume }, index) => (
-          <Table.Tr key={`${nodeLabel}-${volume.name}-${index}`}>
+    <Stack gap="sm">
+      <Text fw={500}>{countLabel}</Text>
+      <Table verticalSpacing="xs" highlightOnHover>
+        <Table.Thead>
+          <Table.Tr>
             {showNodeColumn ? (
+              <Table.Th>
+                <ColumnFilterHeader
+                  label="Node"
+                  isActive={selectedNodes.length > 0}
+                  onClear={() => setSelectedNodes([])}
+                >
+                  <ScrollArea.Autosize mah={200} type="auto">
+                    <Checkbox.Group value={selectedNodes} onChange={setSelectedNodes}>
+                      <Stack gap="xs">
+                        {nodeOptions.map((option) => (
+                          <Checkbox
+                            key={option.value}
+                            value={option.value}
+                            label={option.label}
+                            size="xs"
+                          />
+                        ))}
+                      </Stack>
+                    </Checkbox.Group>
+                  </ScrollArea.Autosize>
+                </ColumnFilterHeader>
+              </Table.Th>
+            ) : null}
+            <Table.Th>
+              <ColumnFilterHeader
+                label="Volume"
+                isActive={nameFilter.trim() !== ''}
+                onClear={() => setNameFilter('')}
+              >
+                <TextInput
+                  placeholder="Filter by name"
+                  leftSection={<IconSearch size={16} />}
+                  value={nameFilter}
+                  onChange={(event) => setNameFilter(event.currentTarget.value)}
+                  size="xs"
+                  rightSection={
+                    nameFilter ? (
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => setNameFilter('')}
+                        aria-label="Clear volume name filter"
+                      >
+                        <IconX size={14} />
+                      </ActionIcon>
+                    ) : null
+                  }
+                />
+              </ColumnFilterHeader>
+            </Table.Th>
+            <Table.Th>
+              <ColumnFilterHeader
+                label="Features"
+                isActive={selectedFeatures.length > 0}
+                onClear={() => setSelectedFeatures([])}
+              >
+                <Checkbox.Group value={selectedFeatures} onChange={setSelectedFeatures}>
+                  <Stack gap="xs">
+                    {VOLUME_FEATURE_OPTIONS.map((option) => (
+                      <Checkbox
+                        key={option.value}
+                        value={option.value}
+                        label={option.label}
+                        size="xs"
+                      />
+                    ))}
+                  </Stack>
+                </Checkbox.Group>
+              </ColumnFilterHeader>
+            </Table.Th>
+            <Table.Th>Used / snapshots</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {filteredVolumes.length === 0 ? (
+            <Table.Tr>
+              <Table.Td colSpan={columnCount}>
+                <Text size="sm" c="dimmed">
+                  No volumes match your filters.
+                </Text>
+              </Table.Td>
+            </Table.Tr>
+          ) : null}
+          {filteredVolumes.map(({ nodeLabel, volume }, index) => (
+            <Table.Tr key={`${nodeLabel}-${volume.name}-${index}`}>
+              {showNodeColumn ? (
+                <Table.Td>
+                  <CopyableText size="xs" c="dimmed" textToCopy={nodeLabel}>
+                    {nodeLabel}
+                  </CopyableText>
+                </Table.Td>
+              ) : null}
               <Table.Td>
-                <CopyableText size="xs" c="dimmed" textToCopy={nodeLabel}>
-                  {nodeLabel}
+                <CopyableText size="xs" fw={500} textToCopy={volume.name}>
+                  {volume.name}
                 </CopyableText>
               </Table.Td>
-            ) : null}
-            <Table.Td>
-              <CopyableText size="xs" fw={500} textToCopy={volume.name}>
-                {volume.name}
-              </CopyableText>
-            </Table.Td>
-            <Table.Td>
-              <Group gap={6} wrap="nowrap">
-                {volume.isEncrypted ? (
-                  <Tooltip label="Encryption enabled">
-                    <IconKey size={16} aria-label="Encryption enabled" />
-                  </Tooltip>
-                ) : null}
-                {volume.snapLockMode && volume.snapLockMode !== 'NON_SNAPLOCK' ? (
-                  <Tooltip label={`SnapLock: ${volume.snapLockMode}`}>
-                    <IconLock size={16} aria-label={`SnapLock: ${volume.snapLockMode}`} />
-                  </Tooltip>
-                ) : null}
-                {volume.tieringPolicy && volume.tieringPolicy !== 'NONE' ? (
-                  <Tooltip label={`Tiering: ${volume.tieringPolicy}`}>
-                    <IconCloud size={16} aria-label={`Tiering: ${volume.tieringPolicy}`} />
-                  </Tooltip>
-                ) : null}
-              </Group>
-            </Table.Td>
-            <Table.Td style={{ minWidth: 220 }}>
-              <VolumeGauge volume={volume} />
-            </Table.Td>
-          </Table.Tr>
-        ))}
-      </Table.Tbody>
-    </Table>
+              <Table.Td>
+                <Group gap={6} wrap="nowrap">
+                  {volumeHasEncryption(volume) ? (
+                    <Tooltip label="Encryption enabled">
+                      <IconKey size={16} aria-label="Encryption enabled" />
+                    </Tooltip>
+                  ) : null}
+                  {volumeHasSnapLock(volume) ? (
+                    <Tooltip label={`SnapLock: ${volume.snapLockMode}`}>
+                      <IconLock size={16} aria-label={`SnapLock: ${volume.snapLockMode}`} />
+                    </Tooltip>
+                  ) : null}
+                  {volumeHasTiering(volume) ? (
+                    <Tooltip label={`Tiering: ${volume.tieringPolicy}`}>
+                      <IconCloud size={16} aria-label={`Tiering: ${volume.tieringPolicy}`} />
+                    </Tooltip>
+                  ) : null}
+                </Group>
+              </Table.Td>
+              <Table.Td style={{ minWidth: 220 }}>
+                <VolumeGauge volume={volume} />
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    </Stack>
   )
 }
 
@@ -4074,10 +4279,7 @@ function App() {
                                 />
                                 {volumeRows.length > 0 ? (
                                   <Paper withBorder radius="lg" p="md">
-                                    <Stack gap="sm">
-                                      <Text fw={500}>Volumes ({volumeRows.length})</Text>
-                                      <VolumesTable volumes={volumeRows} />
-                                    </Stack>
+                                    <VolumesTable volumes={volumeRows} />
                                   </Paper>
                                 ) : areWorkloadsLoading ? (
                                   <VolumesPanelSkeleton showNodeColumn={Boolean(pair.node2)} />
@@ -4176,10 +4378,7 @@ function App() {
                               </Paper>
                               {volumeRows.length > 0 ? (
                                 <Paper withBorder radius="lg" p="md">
-                                  <Stack gap="sm">
-                                    <Text fw={500}>Volumes ({volumeRows.length})</Text>
-                                    <VolumesTable volumes={volumeRows} />
-                                  </Stack>
+                                  <VolumesTable volumes={volumeRows} />
                                 </Paper>
                               ) : areWorkloadsLoading ? (
                                 <VolumesPanelSkeleton showNodeColumn />
