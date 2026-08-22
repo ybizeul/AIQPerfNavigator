@@ -1892,8 +1892,8 @@ function ColumnFilterHeader({
         <Popover.Target>
           <ActionIcon
             size="sm"
-            variant={isActive ? 'light' : 'subtle'}
-            color={isActive ? 'blue' : 'gray'}
+            variant="subtle"
+            color="gray"
             onClick={() => setOpened((current) => !current)}
             aria-label={`Filter by ${label.toLowerCase()}`}
           >
