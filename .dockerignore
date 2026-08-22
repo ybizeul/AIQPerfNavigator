@@ -6,5 +6,6 @@ docs/
 .mise.toml
 *.md
 tsconfig*.json
-vite.config.ts
+scripts/
 .oxlintrc.json
+bun.lock

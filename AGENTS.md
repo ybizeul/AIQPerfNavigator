@@ -4,19 +4,19 @@ This document provides guidelines for AI coding agents working on the **AIQ Syst
 
 ## Project Overview
 
-A Vite + React web tool for searching and organizing AIQ systems via GraphQL. The app stores bearer tokens and saved systems locally in browser storage, and allows tagging and filtering of systems.
+A React web tool for searching and organizing AIQ systems via GraphQL. The app stores bearer tokens and saved systems locally in browser storage, and allows tagging and filtering of systems.
 
-- **Tech stack**: React 19, TypeScript 6, Vite 8, Mantine UI 9, oxlint
+- **Tech stack**: React 19, TypeScript 6, Bun, Mantine UI 9, oxlint
 
 ## Build & Development Commands
 
 ### Tool Management with mise
 
-This project uses [mise](https://mise.jdx.dev/) to manage Node.js and other dependencies.
+This project uses [mise](https://mise.jdx.dev/) to manage Bun and other tools.
 
 **Setup** (first time):
 ```bash
-mise install             # Install Node.js and other tools defined in .mise.toml
+mise install             # Install Bun and other tools defined in .mise.toml
 ```
 
 **Check current versions**:
@@ -30,8 +30,8 @@ mise list                # Show all installed versions
 **Using mise tasks** (recommended):
 ```bash
 mise run install         # Install dependencies
-mise run dev            # Start dev server (Vite)
-mise run build          # Build for production (runs tsc -b && vite build)
+mise run dev            # Start Bun HTML/React dev server
+mise run build          # Build for production (tsc -b && bun build)
 mise run preview        # Preview production build
 mise run lint           # Run oxlint
 mise run typecheck      # Run TypeScript type checking
@@ -39,26 +39,26 @@ mise run clean          # Clean build artifacts and dependencies
 mise run reset          # Clean and reinstall dependencies
 ```
 
-**Or using npm directly**:
+**Or using Bun directly**:
 ```bash
-npm install              # Install dependencies
-npm run dev             # Start dev server (Vite)
-npm run build           # Build for production (runs tsc -b && vite build)
-npm run preview         # Preview production build
-npm run lint            # Run oxlint
+bun install              # Install dependencies
+bun run dev             # Start Bun HTML/React dev server
+bun run build           # Build for production (tsc -b && bun build)
+bun run preview         # Preview production build
+bun run lint            # Run oxlint
 ```
 
 ### Running type checks
 ```bash
 mise run typecheck      # Run TypeScript type checking (recommended)
-npx tsc -b              # Type check all project references
-npx tsc -b --force      # Force rebuild type info
+bunx tsc -b             # Type check all project references
+bunx tsc -b --force     # Force rebuild type info
 ```
 
 ### Testing
 ⚠️ **No test framework is currently configured.** If tests are added:
-- Use Vitest (standard for Vite projects)
-- Run single test: `npm test -- <test-file-path>`
+- Use `bun test`
+- Run a single file: `bun test <test-file-path>`
 
 ## Code Style Guidelines
 
@@ -237,8 +237,8 @@ body {
 
 **Running lint**:
 ```bash
-npm run lint                    # Lint entire project
-npx oxlint src/App.tsx         # Lint specific file
+bun run lint                    # Lint entire project
+bunx oxlint src/App.tsx         # Lint specific file
 ```
 
 ## Project Structure
@@ -252,16 +252,18 @@ consolidator/
 │   ├── index.css            # Global styles
 │   └── assets/              # Static assets
 ├── public/                  # Public static files
+├── scripts/
+│   └── preview.ts           # Serve dist/ for production preview
 ├── docs/                    # Project documentation
 │   ├── MISE.md             # mise setup and usage guide
 │   └── REFACTORING_SUMMARY.md  # Refactoring history
 ├── dist/                    # Build output (generated)
 ├── graphql-schema.json      # AIQ GraphQL schema reference
+├── index.html               # Bun HTML entrypoint
 ├── package.json
+├── bun.lock                 # Bun lockfile
 ├── tsconfig.json            # Root TS config (references only)
 ├── tsconfig.app.json        # App TS config
-├── tsconfig.node.json       # Node TS config (for Vite config)
-├── vite.config.ts           # Vite configuration
 ├── .oxlintrc.json          # Linting configuration
 ├── .mise.toml              # mise tool version management
 ├── .gitignore              # Git ignore patterns

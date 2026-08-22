@@ -1,6 +1,6 @@
 # AIQ performance browser
 
-Small Vite + React web tool built on top of the repository GraphQL schema for:
+Small React web tool built on top of the repository GraphQL schema for:
 
 - storing an AIQ bearer token locally in the browser
 - searching systems by customer, cluster, serial number, system name, and customer site
@@ -19,7 +19,7 @@ The app uses the schema-backed `systems(searchFilters: ...)` query for customer,
 
 ### Prerequisites
 
-This project uses [mise](https://mise.jdx.dev/) to manage Node.js and other dependencies.
+This project uses [mise](https://mise.jdx.dev/) to manage Bun and other tools.
 
 **Install mise** (if not already installed):
 ```bash
@@ -33,15 +33,15 @@ brew install mise
 
 ### Initial setup
 
-1. Install project tools (Node.js, npm):
+1. Install project tools (Bun):
    ```bash
    mise install
    ```
 
-2. Install npm dependencies:
+2. Install dependencies:
    ```bash
    mise run install
-   # or directly: npm install
+   # or directly: bun install
    ```
 
 ## Development
@@ -50,28 +50,28 @@ brew install mise
 
 ```bash
 mise run dev
-# or directly: npm run dev
+# or directly: bun run dev
 ```
 
 ### Build
 
 ```bash
 mise run build
-# or directly: npm run build
+# or directly: bun run build
 ```
 
 ### Lint
 
 ```bash
 mise run lint
-# or directly: npm run lint
+# or directly: bun run lint
 ```
 
 ### Type checking
 
 ```bash
 mise run typecheck
-# or directly: npx tsc -b
+# or directly: bunx tsc -b
 ```
 
 ### Available mise tasks

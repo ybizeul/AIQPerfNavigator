@@ -8,7 +8,7 @@ This project uses [mise](https://mise.jdx.dev/) for managing tool dependencies a
 # 1. Install tools defined in .mise.toml
 mise install
 
-# 2. Install npm dependencies
+# 2. Install dependencies
 mise run install
 
 # 3. Start development
@@ -22,15 +22,12 @@ mise run dev
 
 ## Available Tools
 
-### Node.js
-- **Version**: 26.5.0
-- **Location**: `~/.local/share/mise/installs/node/26.5.0/`
+### Bun
+- **Version**: 1.4.0
 - **Check version**: `mise current`
 - **Switch versions**: Edit `.mise.toml` and run `mise install`
 
-### npm
-- Bundled with Node.js (v11.17.0)
-- Automatically available when Node.js is installed via mise
+Bun is the package manager, script runtime, and HTML/React bundler for this project.
 
 ## Available Tasks
 
@@ -38,12 +35,12 @@ All tasks are defined in `.mise.toml` under `[tasks.*]`:
 
 | Task | Command | Description |
 |------|---------|-------------|
-| `install` | `npm install` | Install project dependencies |
-| `dev` | `npm run dev` | Start development server |
-| `build` | `npm run build` | Build for production |
-| `lint` | `npm run lint` | Run oxlint |
-| `preview` | `npm run preview` | Preview production build |
-| `typecheck` | `npx tsc -b` | Run TypeScript type checking |
+| `install` | `bun install` | Install project dependencies |
+| `dev` | `bun run dev` | Start development server |
+| `build` | `bun run build` | Build for production |
+| `lint` | `bun run lint` | Run oxlint |
+| `preview` | `bun run preview` | Preview production build |
+| `typecheck` | `bunx tsc -b` | Run TypeScript type checking |
 | `clean` | Remove dist/ and node_modules/ | Clean build artifacts |
 | `reset` | `clean` + `install` | Clean and reinstall |
 
@@ -63,7 +60,7 @@ mise current
 mise list
 
 # Update a tool
-mise use node@latest
+mise use bun@latest
 mise install
 ```
 
@@ -73,7 +70,7 @@ Edit `.mise.toml` and add tools under `[tools]`:
 
 ```toml
 [tools]
-node = "26.5.0"
+bun = "1.4.0"
 python = "3.12"  # Example
 ```
 
@@ -89,7 +86,7 @@ Edit `.mise.toml` and add tasks under `[tasks.*]`:
 ```toml
 [tasks.test]
 description = "Run tests"
-run = "npm test"
+run = "bun test"
 ```
 
 ## Troubleshooting
@@ -100,7 +97,7 @@ run = "npm test"
 mise install
 
 # Install specific tool
-mise install node@26.5.0
+mise install bun@1.4.0
 ```
 
 ### Wrong version active
