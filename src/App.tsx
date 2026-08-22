@@ -2052,6 +2052,10 @@ function App() {
     key: 'aiq-system-organizer-nagp-mappings',
     defaultValue: {},
   })
+  const [metricsTagFilter, setMetricsTagFilter] = useLocalStorage<string[]>({
+    key: 'aiq-system-organizer-metrics-tag-filter',
+    defaultValue: [],
+  })
   const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
@@ -2070,7 +2074,6 @@ function App() {
   const [dateRange, setDateRange] = useState('7')
   const [customStartDate, setCustomStartDate] = useState<Date | null>(null)
   const [customEndDate, setCustomEndDate] = useState<Date | null>(null)
-  const [performanceTagFilter, setPerformanceTagFilter] = useState<string[]>([])
   const [searchPage, setSearchPage] = useState(1)
   const [showSavedOnly, setShowSavedOnly] = useState(false)
   const [stackLines, setStackLines] = useState(true)
@@ -2084,7 +2087,6 @@ function App() {
   const [workloadsLoading, setWorkloadsLoading] = useState<Set<string>>(new Set())
   const workloadsLoadingRef = useRef(new Set<string>())
   const [capacitySelectedPairKeys, setCapacitySelectedPairKeys] = useState<Set<string>>(new Set())
-  const [capacityTagFilter, setCapacityTagFilter] = useState<string[]>([])
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
 
@@ -2171,19 +2173,12 @@ function App() {
     [savedPairs],
   )
 
-  const performanceVisiblePairs = useMemo(() => {
-    if (performanceTagFilter.length === 0) return sortedSavedPairs
+  const metricsVisiblePairs = useMemo(() => {
+    if (metricsTagFilter.length === 0) return sortedSavedPairs
     return sortedSavedPairs.filter((pair) =>
-      performanceTagFilter.every((tag) => pair.tags.includes(tag)),
+      metricsTagFilter.every((tag) => pair.tags.includes(tag)),
     )
-  }, [sortedSavedPairs, performanceTagFilter])
-
-  const capacityVisiblePairs = useMemo(() => {
-    if (capacityTagFilter.length === 0) return sortedSavedPairs
-    return sortedSavedPairs.filter((pair) =>
-      capacityTagFilter.every((tag) => pair.tags.includes(tag)),
-    )
-  }, [sortedSavedPairs, capacityTagFilter])
+  }, [sortedSavedPairs, metricsTagFilter])
 
   const filteredSearchResults = useMemo(() => {
     if (!showSavedOnly) return results.pairs
@@ -2395,6 +2390,13 @@ function App() {
           : pair,
       ),
     )
+  }
+
+  const handleMetricsTagFilterChange = (value: string[]) => {
+    setMetricsTagFilter(value)
+    setSelectedPairKeys(new Set())
+    setPerformanceData(new Map())
+    setCapacitySelectedPairKeys(new Set())
   }
 
   const handleCapacityPairSelection = (pairKey: string) => {
@@ -3104,23 +3106,23 @@ function App() {
                               <div>
                                 <Text fw={500} size="sm">HA Pairs</Text>
                                 <Text size="xs" c="dimmed">
-                                  {performanceVisiblePairs.length}{performanceTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
+                                  {metricsVisiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
                                 </Text>
                               </div>
-                              {performanceVisiblePairs.length > 0 ? (
+                              {metricsVisiblePairs.length > 0 ? (
                                 <Button
                                   size="compact-xs"
                                   variant="light"
                                   onClick={() => {
-                                    const allVisible = new Set(performanceVisiblePairs.map((p) => p.key))
-                                    const allSelected = performanceVisiblePairs.every((p) => selectedPairKeys.has(p.key))
+                                    const allVisible = new Set(metricsVisiblePairs.map((p) => p.key))
+                                    const allSelected = metricsVisiblePairs.every((p) => selectedPairKeys.has(p.key))
                                     if (allSelected) {
                                       setSelectedPairKeys(new Set())
                                       setPerformanceData(new Map())
                                     } else {
                                       setSelectedPairKeys(allVisible)
                                       const { startDateStr, endDateStr } = computeDateStrings()
-                                      for (const pair of performanceVisiblePairs) {
+                                      for (const pair of metricsVisiblePairs) {
                                         for (const graph of PERFORMANCE_GRAPHS) {
                                           void handleLoadPerformanceData(pair.node1, graph.name, startDateStr, endDateStr)
                                           if (pair.node2) void handleLoadPerformanceData(pair.node2, graph.name, startDateStr, endDateStr)
@@ -3129,7 +3131,7 @@ function App() {
                                     }
                                   }}
                                 >
-                                  {performanceVisiblePairs.every((p) => selectedPairKeys.has(p.key)) ? 'Clear' : 'Select all'}
+                                  {metricsVisiblePairs.every((p) => selectedPairKeys.has(p.key)) ? 'Clear' : 'Select all'}
                                 </Button>
                               ) : null}
                             </Group>
@@ -3138,12 +3140,8 @@ function App() {
                               size="xs"
                               placeholder="Filter by tag"
                               data={tagOptions}
-                              value={performanceTagFilter}
-                              onChange={(value) => {
-                                setPerformanceTagFilter(value)
-                                setSelectedPairKeys(new Set())
-                                setPerformanceData(new Map())
-                              }}
+                              value={metricsTagFilter}
+                              onChange={handleMetricsTagFilterChange}
                               clearable
                               searchable
                               nothingFoundMessage="No tags"
@@ -3151,7 +3149,7 @@ function App() {
                             />
                           </div>
                           <ScrollArea style={{ flex: 1 }}>
-                            {groupPairsByCluster(performanceVisiblePairs).map((group, groupIndex) => (
+                            {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{ 
                                   padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
@@ -3674,18 +3672,15 @@ function App() {
                           <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
                             <Text fw={500} size="sm">HA Pairs</Text>
                             <Text size="xs" c="dimmed">
-                              {capacityVisiblePairs.length}{capacityTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
+                              {metricsVisiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
                             </Text>
                             <MultiSelect
                               mt="xs"
                               size="xs"
                               placeholder="Filter by tag"
                               data={tagOptions}
-                              value={capacityTagFilter}
-                              onChange={(value) => {
-                                setCapacityTagFilter(value)
-                                setCapacitySelectedPairKeys(new Set())
-                              }}
+                              value={metricsTagFilter}
+                              onChange={handleMetricsTagFilterChange}
                               clearable
                               searchable
                               nothingFoundMessage="No tags"
@@ -3693,7 +3688,7 @@ function App() {
                             />
                           </div>
                           <ScrollArea style={{ flex: 1 }}>
-                            {groupPairsByCluster(capacityVisiblePairs).map((group, groupIndex) => (
+                            {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{
                                   padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
