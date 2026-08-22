@@ -50,6 +50,7 @@ import {
   IconCheck,
   IconCloud,
   IconDatabase,
+  IconDeviceDesktop,
   IconDownload,
   IconKey,
   IconLock,
@@ -72,6 +73,8 @@ const BROWSER_DATA_FILENAME = 'aiqperfnav.aiq'
 const BROWSER_DATA_FORMAT = 'aiq-perf-navigator-browser-data'
 const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
 const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
+const COLOR_SCHEME_LABELS = { auto: 'system', light: 'light', dark: 'dark' } as const
+const NEXT_COLOR_SCHEME = { auto: 'light', light: 'dark', dark: 'auto' } as const
 
 type BrowserDataExport = {
   format: typeof BROWSER_DATA_FORMAT
@@ -2110,9 +2113,7 @@ function HAPairCard({
 }
 
 function App() {
-  const { setColorScheme } = useMantineColorScheme()
-  const computedColorScheme = useComputedColorScheme('light', { getInitialValueInEffect: true })
-  const isDarkMode = computedColorScheme === 'dark'
+  const { colorScheme, setColorScheme } = useMantineColorScheme()
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
   const browserDataInputRef = useRef<HTMLInputElement>(null)
@@ -2913,14 +2914,24 @@ function App() {
               </div>
 
               <Group gap="sm">
-                <ActionIcon
-                  variant="default"
-                  size="lg"
-                  aria-label={`Switch to ${isDarkMode ? 'light' : 'dark'} mode`}
-                  onClick={() => setColorScheme(isDarkMode ? 'light' : 'dark')}
-                >
-                  {isDarkMode ? <IconSun size={18} /> : <IconMoon size={18} />}
-                </ActionIcon>
+                <Tooltip label={`Appearance: ${COLOR_SCHEME_LABELS[colorScheme]}`}>
+                  <ActionIcon
+                    variant="default"
+                    size="lg"
+                    aria-label={`Appearance: ${COLOR_SCHEME_LABELS[colorScheme]}. Switch to ${
+                      COLOR_SCHEME_LABELS[NEXT_COLOR_SCHEME[colorScheme]]
+                    }.`}
+                    onClick={() => setColorScheme(NEXT_COLOR_SCHEME[colorScheme])}
+                  >
+                    {colorScheme === 'auto' ? (
+                      <IconDeviceDesktop size={18} />
+                    ) : colorScheme === 'dark' ? (
+                      <IconMoon size={18} />
+                    ) : (
+                      <IconSun size={18} />
+                    )}
+                  </ActionIcon>
+                </Tooltip>
                 <Menu position="bottom-end" shadow="md" width={210}>
                   <Menu.Target>
                     <ActionIcon
