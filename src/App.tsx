@@ -70,6 +70,8 @@ import {
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
 const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken'
 const PERFORMANCE_API_URL = 'https://api.activeiq.netapp.com/v1/performance-data/graphs'
+const WATCHLIST_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/list'
+const WATCHLIST_ACTION_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/action'
 const PAGE_SIZE = 100
 const BROWSER_DATA_FILENAME = 'aiqperfnav.aiq'
 const BROWSER_DATA_FORMAT = 'aiq-perf-navigator-browser-data'
@@ -191,8 +193,8 @@ const SYSTEMS_FIELDS = `
 `
 
 const QUERY_BY_CLUSTER = `
-  query SearchByCluster($pageSize: Int!, $clusterName: String, $nagpId: String, $after: String) {
-    systems(pageSize: $pageSize, clusterName: $clusterName, nagpId: $nagpId, after: $after) {
+  query SearchByCluster($pageSize: Int!, $clusterName: String, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, clusterName: $clusterName, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
       totalCount
       cursor
       systems {${SYSTEMS_FIELDS}    }
@@ -201,8 +203,8 @@ const QUERY_BY_CLUSTER = `
 `
 
 const QUERY_BY_HOSTNAME = `
-  query SearchByHostName($pageSize: Int!, $hostName: String, $nagpId: String, $after: String) {
-    systems(pageSize: $pageSize, hostName: $hostName, nagpId: $nagpId, after: $after, caseInsensitiveFields: [hostName]) {
+  query SearchByHostName($pageSize: Int!, $hostName: String, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, hostName: $hostName, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after, caseInsensitiveFields: [hostName]) {
       totalCount
       cursor
       systems {${SYSTEMS_FIELDS}    }
@@ -210,9 +212,9 @@ const QUERY_BY_HOSTNAME = `
   }
 `
 
-const QUERY_BY_SERIAL = `
-  query SearchBySerial($pageSize: Int!, $systemKey: [SystemKey!], $nagpId: String, $after: String) {
-    systems(pageSize: $pageSize, systemKey: $systemKey, nagpId: $nagpId, after: $after) {
+const QUERY_BY_SYSTEM_KEY = `
+  query SearchBySystemKey($pageSize: Int!, $systemKey: [SystemKey!], $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, systemKey: $systemKey, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
       totalCount
       cursor
       systems {${SYSTEMS_FIELDS}    }
@@ -221,8 +223,8 @@ const QUERY_BY_SERIAL = `
 `
 
 const QUERY_BY_NAGP = `
-  query SearchByNagp($pageSize: Int!, $nagpId: String, $after: String) {
-    systems(pageSize: $pageSize, nagpId: $nagpId, after: $after) {
+  query SearchByFilters($pageSize: Int!, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
       totalCount
       cursor
       systems {${SYSTEMS_FIELDS}    }
@@ -254,7 +256,47 @@ const CLUSTER_QUERY = `
 
 type SearchForm = {
   customer: string
+  watchlist: string
   query: string
+}
+
+type SearchQueryType = 'cluster' | 'serialNumber' | 'systemId' | 'hostName'
+
+type Watchlist = {
+  id: string
+  name: string
+  isDefault: boolean
+}
+
+type WatchlistListResponse = {
+  results?: {
+    default_watchlist_id?: string
+    watchlist?: Array<{
+      watchlist_id?: string
+      watchlist_name?: string
+    }>
+  }
+}
+
+type WatchlistActionResponse = {
+  results?: {
+    customer_details?: Array<{
+      customer_id?: string
+      customer_name?: string
+    }>
+  }
+}
+
+type SearchScope = {
+  nagpId: string
+  watchlistId: string
+  customerId: string
+}
+
+const EMPTY_SEARCH_SCOPE: SearchScope = {
+  nagpId: '',
+  watchlistId: '',
+  customerId: '',
 }
 
 type GraphQlError = {
@@ -543,6 +585,7 @@ function normalizeTags(tags: string[], automaticTags: string[] = []) {
 
 const emptySearchForm: SearchForm = {
   customer: '',
+  watchlist: '',
   query: '',
 }
 
@@ -819,19 +862,23 @@ function groupPairsByCustomer<T extends HAPair | SavedHAPair>(pairs: T[]): Custo
 }
 
 function buildQueryVariables(
-  customer: string,
-  queryType: 'cluster' | 'serialNumber' | 'hostName',
+  scope: SearchScope,
+  queryType: SearchQueryType,
   queryValue: string,
   cursor?: string,
 ): [string, Record<string, unknown>] {
   const base: Record<string, unknown> = { pageSize: PAGE_SIZE }
-  if (customer) base.nagpId = customer
+  if (scope.nagpId) base.nagpId = scope.nagpId
+  if (scope.watchlistId) base.watchlistId = scope.watchlistId
+  if (scope.customerId) base.customerId = scope.customerId
   if (cursor) base.after = cursor
 
   if (queryType === 'cluster') {
     return [QUERY_BY_CLUSTER, { ...base, clusterName: queryValue }]
   } else if (queryType === 'serialNumber') {
-    return [QUERY_BY_SERIAL, { ...base, systemKey: [{ serialNumber: queryValue }] }]
+    return [QUERY_BY_SYSTEM_KEY, { ...base, systemKey: [{ serialNumber: queryValue }] }]
+  } else if (queryType === 'systemId') {
+    return [QUERY_BY_SYSTEM_KEY, { ...base, systemKey: [{ systemId: queryValue }] }]
   } else {
     return [QUERY_BY_HOSTNAME, { ...base, hostName: queryValue }]
   }
@@ -934,15 +981,106 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
   return payload.access_token
 }
 
+function parseWatchlists(payload: unknown): Watchlist[] {
+  const results = (payload as WatchlistListResponse | null)?.results
+  const list = results?.watchlist
+
+  if (!Array.isArray(list)) {
+    throw new Error('Watchlist response did not contain a list.')
+  }
+
+  const defaultId = results?.default_watchlist_id
+  const watchlists = list.flatMap((item): Watchlist[] => {
+    if (!item || typeof item !== 'object') return []
+    const { watchlist_id: id, watchlist_name: name } = item
+    return typeof id === 'string' && typeof name === 'string'
+      ? [{ id, name, isDefault: id === defaultId }]
+      : []
+  })
+
+  return Array.from(new Map(watchlists.map((watchlist) => [watchlist.id, watchlist])).values())
+}
+
+async function fetchWatchlistApi(url: string, token: string): Promise<unknown> {
+  let response: Response
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        AuthorizationToken: token,
+      },
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown network error'
+    throw new Error(`Failed to connect to the watchlist API: ${message}`)
+  }
+
+  if (!response.ok) {
+    throw new Error(`Watchlist API returned HTTP ${response.status}.`)
+  }
+
+  return response.json()
+}
+
+async function fetchWatchlists(token: string): Promise<Watchlist[]> {
+  return parseWatchlists(await fetchWatchlistApi(WATCHLIST_API_URL, token))
+}
+
+function parseWatchlistCustomerIds(payload: unknown): string[] {
+  const customers = (payload as WatchlistActionResponse | null)?.results?.customer_details
+  if (!Array.isArray(customers)) return []
+
+  return Array.from(
+    new Set(
+      customers.flatMap((item) =>
+        typeof item?.customer_id === 'string' && item.customer_id.trim()
+          ? [item.customer_id.trim()]
+          : [],
+      ),
+    ),
+  )
+}
+
+async function fetchWatchlistCustomerIds(token: string, watchlistId: string): Promise<string[]> {
+  const url = `${WATCHLIST_ACTION_API_URL}?id=${encodeURIComponent(watchlistId)}`
+  return parseWatchlistCustomerIds(await fetchWatchlistApi(url, token))
+}
+
+async function resolveSearchScopes(
+  token: string,
+  nagpId: string,
+  watchlistId: string,
+): Promise<SearchScope[]> {
+  if (!watchlistId) {
+    return [{ nagpId, watchlistId: '', customerId: '' }]
+  }
+
+  const customerIds = await fetchWatchlistCustomerIds(token, watchlistId)
+  if (customerIds.length > 0) {
+    return customerIds.map((customerId) => ({
+      nagpId,
+      watchlistId: '',
+      customerId,
+    }))
+  }
+
+  return [{ nagpId, watchlistId, customerId: '' }]
+}
+
 async function fetchSystemsForQuery(
   token: string,
-  customer: string,
-  queryType: 'cluster' | 'serialNumber' | 'hostName',
+  scope: SearchScope,
+  queryType: SearchQueryType,
   queryValue: string,
   cursor?: string,
   accumulatedResults: SystemSummary[] = [],
 ): Promise<SystemSummary[]> {
-  const [queryString, variables] = buildQueryVariables(customer, queryType, queryValue, cursor)
+  const [queryString, variables] = buildQueryVariables(
+    scope,
+    queryType,
+    queryValue,
+    cursor,
+  )
 
   const requestBody = {
     query: queryString,
@@ -1011,7 +1149,14 @@ async function fetchSystemsForQuery(
   // If we have more results to fetch (cursor exists and we haven't fetched everything)
   if (nextCursor && allResults.length < totalCount) {
     console.log(`Fetched ${allResults.length} of ${totalCount} systems for ${queryType}, fetching next page...`)
-    return fetchSystemsForQuery(token, customer, queryType, queryValue, nextCursor, allResults)
+    return fetchSystemsForQuery(
+      token,
+      scope,
+      queryType,
+      queryValue,
+      nextCursor,
+      allResults,
+    )
   }
 
   console.log(`Fetched all ${allResults.length} systems for ${queryType}`)
@@ -1170,12 +1315,103 @@ async function fetchWorkloads(
   return { totalUsedKB, totalSnapshotsKiB, totalSizeKB, volumes: volumeDetails }
 }
 
+async function fetchSystemsByFilters(
+  token: string,
+  scope: SearchScope,
+  cursor?: string,
+  accumulated: SystemSummary[] = [],
+): Promise<SystemSummary[]> {
+  const requestBody = {
+    query: QUERY_BY_NAGP,
+    variables: {
+      pageSize: PAGE_SIZE,
+      nagpId: scope.nagpId || undefined,
+      watchlistId: scope.watchlistId || undefined,
+      customerId: scope.customerId || undefined,
+      after: cursor,
+    },
+  }
+
+  let response: Response
+  try {
+    response = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    })
+  } catch (fetchError) {
+    const errorMsg = fetchError instanceof Error ? fetchError.message : 'Unknown error'
+    throw new Error(
+      `Network request failed for filtered search: ${errorMsg}. ` +
+      `This may be due to rate limiting, or connectivity issues.`
+    )
+  }
+
+  if (!response.ok) {
+    let errorMessage = `AIQ filtered search returned HTTP ${response.status}`
+    try {
+      const errorBody = await response.json()
+      if (errorBody.error) {
+        errorMessage += `: ${errorBody.error}`
+      }
+      if (response.status === 429) {
+        errorMessage += `. Rate limit exceeded - please wait before searching again.`
+      }
+    } catch {
+      // Ignore parsing errors
+    }
+    throw new Error(errorMessage)
+  }
+
+  const payload = (await response.json()) as GraphQlResponse<SystemsQueryData>
+
+  if (payload.errors && payload.errors.length > 0) {
+    throw new Error(payload.errors.map((error) => error.message).join('\n'))
+  }
+
+  const systems = payload.data?.systems?.systems ?? []
+  const nextCursor = payload.data?.systems?.cursor
+  const totalCount = payload.data?.systems?.totalCount ?? 0
+  const allResults = [...accumulated, ...systems]
+
+  if (nextCursor && allResults.length < totalCount) {
+    console.log(`Fetched ${allResults.length} of ${totalCount} filtered systems, fetching next page...`)
+    return fetchSystemsByFilters(token, scope, nextCursor, allResults)
+  }
+
+  console.log(`Fetched all ${allResults.length} filtered systems`)
+  return allResults
+}
+
+async function fetchSystemsForScope(
+  token: string,
+  scope: SearchScope,
+  query: string,
+): Promise<SystemSummary[]> {
+  if (!query) {
+    return fetchSystemsByFilters(token, scope)
+  }
+
+  const [clusterResults, serialResults, systemIdResults, hostResults] = await Promise.all([
+    fetchSystemsForQuery(token, scope, 'cluster', query),
+    fetchSystemsForQuery(token, scope, 'serialNumber', query),
+    fetchSystemsForQuery(token, scope, 'systemId', query),
+    fetchSystemsForQuery(token, scope, 'hostName', query),
+  ])
+
+  return [...clusterResults, ...serialResults, ...systemIdResults, ...hostResults]
+}
+
 async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
   const query = normalizeValue(form.query)
   const customer = normalizeValue(form.customer)
+  const watchlist = normalizeValue(form.watchlist)
 
   // At least one search parameter is required
-  if (!query && !customer) {
+  if (!query && !customer && !watchlist) {
     return {
       pairs: [],
       totalCount: 0,
@@ -1183,82 +1419,11 @@ async function searchSystems(token: string, form: SearchForm): Promise<SearchRes
     }
   }
 
-  let allResults: SystemSummary[]
-
-  if (!query && customer) {
-    // NAGP-only search with pagination
-    async function fetchNagpSystems(cursor?: string, accumulated: SystemSummary[] = []): Promise<SystemSummary[]> {
-      const requestBody = {
-        query: QUERY_BY_NAGP,
-        variables: { pageSize: PAGE_SIZE, nagpId: customer, after: cursor },
-      }
-
-      let response: Response
-      try {
-        response = await fetch(API_URL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
-        })
-      } catch (fetchError) {
-        const errorMsg = fetchError instanceof Error ? fetchError.message : 'Unknown error'
-        throw new Error(
-          `Network request failed for NAGP search: ${errorMsg}. ` +
-          `This may be due to rate limiting, or connectivity issues.`
-        )
-      }
-
-      if (!response.ok) {
-        let errorMessage = `AIQ NAGP search returned HTTP ${response.status}`
-        try {
-          const errorBody = await response.json()
-          if (errorBody.error) {
-            errorMessage += `: ${errorBody.error}`
-          }
-          if (response.status === 429) {
-            errorMessage += `. Rate limit exceeded - please wait before searching again.`
-          }
-        } catch {
-          // Ignore parsing errors
-        }
-        throw new Error(errorMessage)
-      }
-
-      const payload = (await response.json()) as GraphQlResponse<SystemsQueryData>
-
-      if (payload.errors && payload.errors.length > 0) {
-        throw new Error(payload.errors.map((error) => error.message).join('\n'))
-      }
-
-      const systems = payload.data?.systems?.systems ?? []
-      const nextCursor = payload.data?.systems?.cursor
-      const totalCount = payload.data?.systems?.totalCount ?? 0
-      const allResults = [...accumulated, ...systems]
-
-      // If we have more results to fetch
-      if (nextCursor && allResults.length < totalCount) {
-        console.log(`Fetched ${allResults.length} of ${totalCount} NAGP systems, fetching next page...`)
-        return fetchNagpSystems(nextCursor, allResults)
-      }
-
-      console.log(`Fetched all ${allResults.length} NAGP systems`)
-      return allResults
-    }
-
-    allResults = await fetchNagpSystems()
-  } else {
-    // Execute searches in parallel for all query types
-    const [clusterResults, serialResults, hostResults] = await Promise.all([
-      fetchSystemsForQuery(token, customer, 'cluster', query),
-      fetchSystemsForQuery(token, customer, 'serialNumber', query),
-      fetchSystemsForQuery(token, customer, 'hostName', query),
-    ])
-
-    allResults = [...clusterResults, ...serialResults, ...hostResults]
-  }
+  const scopes = await resolveSearchScopes(token, customer, watchlist)
+  const scopedResults = await Promise.all(
+    scopes.map((scope) => fetchSystemsForScope(token, scope, query)),
+  )
+  const allResults = scopedResults.flat()
 
   // Merge and deduplicate results
   const systemMap = new Map<string, SystemSummary>()
@@ -2398,6 +2563,9 @@ function App() {
   })
   const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([])
+  const [watchlistsError, setWatchlistsError] = useState<string | null>(null)
+  const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(false)
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
   const [results, setResults] = useState<SearchResultState>({
     pairs: [],
@@ -2435,6 +2603,64 @@ function App() {
   useEffect(() => {
     tokenRef.current = token
   }, [token])
+
+  useEffect(() => {
+    if (!refreshToken) {
+      return
+    }
+
+    let isCancelled = false
+
+    async function loadWatchlists() {
+      setIsWatchlistsLoading(true)
+      setWatchlistsError(null)
+
+      try {
+        let accessToken = tokenRef.current
+        if (!accessToken) {
+          accessToken = await refreshAccessToken(refreshToken)
+          tokenRef.current = accessToken
+          setToken(accessToken)
+        }
+
+        let nextWatchlists: Watchlist[]
+        try {
+          nextWatchlists = await fetchWatchlists(accessToken)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : ''
+          if (!message.includes('HTTP 401')) throw error
+
+          accessToken = await refreshAccessToken(refreshToken)
+          tokenRef.current = accessToken
+          setToken(accessToken)
+          nextWatchlists = await fetchWatchlists(accessToken)
+        }
+
+        if (!isCancelled) {
+          setWatchlists(
+            nextWatchlists.sort(
+              (a, b) =>
+                Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name),
+            ),
+          )
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setWatchlists([])
+          setWatchlistsError(
+            error instanceof Error ? error.message : 'Failed to load watchlists.',
+          )
+        }
+      } finally {
+        if (!isCancelled) setIsWatchlistsLoading(false)
+      }
+    }
+
+    void loadWatchlists()
+    return () => {
+      isCancelled = true
+    }
+  }, [refreshToken, setToken])
 
   // Concurrent callers join the pending request instead of each asking the API for its own token.
   const requestAccessToken = () => {
@@ -2683,9 +2909,10 @@ function App() {
 
     const query = normalizeValue(searchForm.query)
     const customer = normalizeValue(searchForm.customer)
+    const watchlist = normalizeValue(searchForm.watchlist)
     
-    if (!query && !customer) {
-      setSearchError('Enter a search term or select a customer.')
+    if (!query && !customer && !watchlist) {
+      setSearchError('Enter a search term or select a NAGP or watchlist.')
       return
     }
 
@@ -2767,7 +2994,7 @@ function App() {
         try {
           const partners = await fetchSystemsForQuery(
             accessToken,
-            '',
+            EMPTY_SEARCH_SCOPE,
             'serialNumber',
             pair.node1.partner.serialNumber,
           )
@@ -2863,11 +3090,21 @@ function App() {
     setRefreshingCapacity((current) => new Set([...current, pairKey]))
 
     const doFetch = async (accessToken: string) => {
-      const node1Systems = await fetchSystemsForQuery(accessToken, '', 'serialNumber', pair.node1.serialNumber)
+      const node1Systems = await fetchSystemsForQuery(
+        accessToken,
+        EMPTY_SEARCH_SCOPE,
+        'serialNumber',
+        pair.node1.serialNumber,
+      )
 
       let node2Systems: SystemSummary[] = []
       if (pair.node2) {
-        node2Systems = await fetchSystemsForQuery(accessToken, '', 'serialNumber', pair.node2.serialNumber)
+        node2Systems = await fetchSystemsForQuery(
+          accessToken,
+          EMPTY_SEARCH_SCOPE,
+          'serialNumber',
+          pair.node2.serialNumber,
+        )
       }
 
       setSavedPairs((current) =>
@@ -3166,6 +3403,8 @@ function App() {
                     setToken('')
                     setRefreshToken('')
                     setDraftRefreshToken('')
+                    setWatchlists([])
+                    setWatchlistsError(null)
                   }}
                 >
                   Remove token
@@ -3328,9 +3567,9 @@ function App() {
                     <Paper withBorder radius="lg" p="lg">
                       <form onSubmit={handleSearch}>
                         <Stack gap="md">
-                          <SimpleGrid cols={{ base: 1, md: 2 }}>
+                          <SimpleGrid cols={{ base: 1, md: 3 }}>
                             <Select
-                              label="Customer"
+                              label="NAGP"
                               placeholder="Select NAGP"
                               data={Object.entries(nagpMappings)
                                 .map(([nagpId, nagpName]) => ({
@@ -3344,9 +3583,27 @@ function App() {
                               searchable
                               nothingFoundMessage="No NAGPs stored"
                             />
+                            <Select
+                              label="Watchlist"
+                              placeholder="Select watchlist"
+                              data={watchlists.map((watchlist) => ({
+                                value: watchlist.id,
+                                label: watchlist.isDefault
+                                  ? `${watchlist.name} (default)`
+                                  : watchlist.name,
+                              }))}
+                              value={searchForm.watchlist}
+                              onChange={(value) => handleFieldChange('watchlist', value || '')}
+                              clearable
+                              searchable
+                              withAlignedLabels
+                              disabled={isWatchlistsLoading || !!watchlistsError}
+                              error={watchlistsError}
+                              nothingFoundMessage="No watchlists found"
+                            />
                             <TextInput
                               label="Search"
-                              placeholder="Cluster, serial number, system name, or customer site"
+                              placeholder="Cluster, serial number, system ID, system name, or customer site"
                               value={searchForm.query}
                               onChange={(event) =>
                                 handleFieldChange('query', event.currentTarget.value)
@@ -3357,8 +3614,10 @@ function App() {
 
                           <Group justify="space-between">
                             <Text size="sm" c="dimmed">
-                              Searches by cluster name, serial number, and host name in parallel.
-                              Customer filter is applied client-side.
+                              Searches by cluster name, serial number, system ID, and host name in
+                              parallel.
+                              NAGP and watchlist filters can be combined. Customer watchlists
+                              are expanded via their customer IDs.
                             </Text>
                             <Group>
                               <Button
