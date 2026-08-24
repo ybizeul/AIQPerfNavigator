@@ -1460,31 +1460,6 @@ async function fetchPerformanceData(
   startDate: string,
   endDate: string,
 ): Promise<PerformanceResponse> {
-  // Split ranges > 14 days into parallel chunks to avoid server-side 500s.
-  const MAX_CHUNK_DAYS = 14
-  const start = new Date(startDate), end = new Date(endDate)
-  const totalDays = Math.round((end.getTime() - start.getTime()) / 86_400_000)
-  if (totalDays > MAX_CHUNK_DAYS) {
-    const chunks: Array<{ chunkStart: string; chunkEnd: string }> = []
-    let cursor = new Date(start)
-    const fmt = (d: Date) => d.toISOString().split('T')[0]
-    while (cursor < end) {
-      const chunkEnd = new Date(cursor)
-      chunkEnd.setDate(chunkEnd.getDate() + MAX_CHUNK_DAYS)
-      const cappedEnd = chunkEnd < end ? chunkEnd : end
-      chunks.push({ chunkStart: fmt(cursor), chunkEnd: fmt(cappedEnd) })
-      cursor = new Date(cappedEnd)
-    }
-    const responses = await Promise.all(
-      chunks.map(({ chunkStart, chunkEnd }) =>
-        fetchPerformanceData(token, graphName, node, chunkStart, chunkEnd),
-      ),
-    )
-    const merged: PerformanceResponse['results']['counterData'] = {}
-    for (const r of responses) Object.assign(merged, r.results.counterData)
-    return { results: { counterMetaData: responses[responses.length - 1].results.counterMetaData, counterData: merged } }
-  }
-
   const params = new URLSearchParams({
     graphName,
     startDate,
@@ -3980,10 +3955,11 @@ function App() {
                               <Select
                                 label="Time Range"
                                 data={[
-                                  { value: '7', label: 'Last 7 days' },
-                                  { value: '14', label: 'Last 14 days' },
-                                  { value: '30', label: 'Last 30 days' },
-                                  { value: '90', label: 'Last 90 days' },
+                                  { value: '7', label: '7 days' },
+                                  { value: '14', label: '14 days' },
+                                  { value: '30', label: '30 days' },
+                                  { value: '90', label: '90 days' },
+                                  { value: '365', label: '1 year' },
                                 ]}
                                 value={customStartDate || customEndDate ? null : dateRange}
                                 onChange={(value) => {
