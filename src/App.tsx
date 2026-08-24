@@ -176,6 +176,13 @@ const SYSTEMS_FIELDS = `
               usedPerformanceTierKiB
             }
           }
+          monthlyCapacity {
+            month
+            physical {
+              usablePerformanceTierKiB
+              usedPerformanceTierKiB
+            }
+          }
         }
         ... on CloudVolumeONTAP {
           cluster {
@@ -359,6 +366,13 @@ type SystemSummary = {
       usedPerformanceTierKiB: number | null
     } | null
   } | null
+  monthlyCapacity?: {
+    month: string | null
+    physical: {
+      usablePerformanceTierKiB: number | null
+      usedPerformanceTierKiB: number | null
+    } | null
+  }[] | null
 }
 
 type HAPair = {
@@ -1792,6 +1806,92 @@ function getAutomaticTagsForPair(pair: Pick<HAPair, 'node1'> | Pick<SavedHAPair,
   return tags
 }
 
+function buildConsolidatedMonthlyCapacity(nodes: SystemSummary[]) {
+  const now = new Date()
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const monthlyTotals = new Map<string, { usedKiB: number; usableKiB: number }>()
+
+  for (const node of nodes) {
+    const nodeMonths = new Map(
+      (node.monthlyCapacity ?? [])
+        .filter(
+          (entry) =>
+            entry.month &&
+            /^\d{4}-(0[1-9]|1[0-2])$/.test(entry.month) &&
+            entry.month <= currentMonth,
+        )
+        .map((entry) => [entry.month!, entry]),
+    )
+
+    for (const [month, entry] of nodeMonths) {
+      const usedKiB = entry.physical?.usedPerformanceTierKiB
+      const usableKiB = entry.physical?.usablePerformanceTierKiB
+      if (
+        typeof usedKiB !== 'number' ||
+        !Number.isFinite(usedKiB) ||
+        typeof usableKiB !== 'number' ||
+        !Number.isFinite(usableKiB)
+      ) {
+        continue
+      }
+
+      const total = monthlyTotals.get(month) ?? { usedKiB: 0, usableKiB: 0 }
+      total.usedKiB += usedKiB
+      total.usableKiB += usableKiB
+      monthlyTotals.set(month, total)
+    }
+  }
+
+  return Array.from(monthlyTotals)
+    .sort(([monthA], [monthB]) => monthA.localeCompare(monthB))
+    .slice(-12)
+    .map(([month, total]) => ({
+      month,
+      Used: total.usedKiB / 1024 ** 3,
+      Usable: total.usableKiB / 1024 ** 3,
+    }))
+}
+
+function CapacityHistoryChart({
+  nodes,
+  isLoading,
+}: {
+  nodes: SystemSummary[]
+  isLoading: boolean
+}) {
+  const data = useMemo(() => buildConsolidatedMonthlyCapacity(nodes), [nodes])
+
+  return (
+    <Stack gap="xs">
+      <Text fw={500} size="sm">12-month capacity history</Text>
+      {isLoading ? (
+        <Skeleton h={220} />
+      ) : data.length > 0 ? (
+        <AreaChart
+          h={220}
+          data={data}
+          dataKey="month"
+          series={[
+            { name: 'Used', color: 'blue.6' },
+            { name: 'Usable', color: 'grape.6' },
+          ]}
+          curveType="monotone"
+          strokeWidth={2}
+          valueFormatter={(value) => `${value.toFixed(1)} TiB`}
+          withDots={false}
+          withGradient={false}
+          withLegend
+          withTooltip
+        />
+      ) : (
+        <Text size="sm" c="dimmed" ta="center" py="xl">
+          No monthly capacity history available for this selection
+        </Text>
+      )}
+    </Stack>
+  )
+}
+
 function CapacityGauge({
   capacity,
 }: {
@@ -3089,8 +3189,20 @@ function App() {
       setSavedPairs((current) =>
         current.map((p) => {
           if (p.key !== pairKey) return p
-          const updatedNode1 = node1Systems.length > 0 ? { ...p.node1, capacity: node1Systems[0].capacity } : p.node1
-          const updatedNode2 = p.node2 && node2Systems.length > 0 ? { ...p.node2, capacity: node2Systems[0].capacity } : p.node2
+          const updatedNode1 = node1Systems.length > 0
+            ? {
+                ...p.node1,
+                capacity: node1Systems[0].capacity,
+                monthlyCapacity: node1Systems[0].monthlyCapacity,
+              }
+            : p.node1
+          const updatedNode2 = p.node2 && node2Systems.length > 0
+            ? {
+                ...p.node2,
+                capacity: node2Systems[0].capacity,
+                monthlyCapacity: node2Systems[0].monthlyCapacity,
+              }
+            : p.node2
           return { ...p, node1: updatedNode1, node2: updatedNode2 }
         }),
       )
@@ -4473,6 +4585,12 @@ function App() {
                             ]
                             return (
                               <Stack gap="md">
+                                <Paper withBorder radius="lg" p="md">
+                                  <CapacityHistoryChart
+                                    nodes={pair.node2 ? [pair.node1, pair.node2] : [pair.node1]}
+                                    isLoading={refreshingCapacity.has(pair.key)}
+                                  />
+                                </Paper>
                                 <HAPairCard
                                   pair={pair}
                                   onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
@@ -4504,6 +4622,9 @@ function App() {
                               .filter((p): p is SavedHAPair => p !== undefined)
                             const nodes = selectedPairs.flatMap((p) =>
                               p.node2 ? [p.node1, p.node2] : [p.node1],
+                            )
+                            const isCapacityHistoryLoading = selectedPairs.some((pair) =>
+                              refreshingCapacity.has(pair.key),
                             )
                             const agg = nodes.reduce(
                               (acc, node) => {
@@ -4551,6 +4672,10 @@ function App() {
                                       {selectedPairs.length} HA pairs · {nodes.length} nodes
                                     </Text>
                                   </div>
+                                  <CapacityHistoryChart
+                                    nodes={nodes}
+                                    isLoading={isCapacityHistoryLoading}
+                                  />
                                   <CapacityGauge capacity={agg} />
                                   {hasWorkloads ? (() => {
                                     const fmt = (kib: number) => {
