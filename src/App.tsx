@@ -1974,21 +1974,23 @@ function VolumesTable({
 
   const filteredVolumes = useMemo(() => {
     const nameQuery = nameFilter.trim().toLowerCase()
-    return volumes.filter(({ nodeLabel, volume }) => {
-      if (nameQuery && !volume.name.toLowerCase().includes(nameQuery)) {
-        return false
-      }
-      if (selectedNodes.length > 0 && !selectedNodes.includes(nodeLabel)) {
-        return false
-      }
-      if (selectedFeatures.length > 0) {
-        const hasAnySelectedFeature = selectedFeatures.some((feature) =>
-          volumeHasFeature(volume, feature as VolumeFeatureFilter),
-        )
-        if (!hasAnySelectedFeature) return false
-      }
-      return true
-    })
+    return volumes
+      .filter(({ nodeLabel, volume }) => {
+        if (nameQuery && !volume.name.toLowerCase().includes(nameQuery)) {
+          return false
+        }
+        if (selectedNodes.length > 0 && !selectedNodes.includes(nodeLabel)) {
+          return false
+        }
+        if (selectedFeatures.length > 0) {
+          const hasAnySelectedFeature = selectedFeatures.some((feature) =>
+            volumeHasFeature(volume, feature as VolumeFeatureFilter),
+          )
+          if (!hasAnySelectedFeature) return false
+        }
+        return true
+      })
+      .sort((a, b) => b.volume.totalUsedKB - a.volume.totalUsedKB)
   }, [volumes, nameFilter, selectedNodes, selectedFeatures])
 
   if (volumes.length === 0) return null
