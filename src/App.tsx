@@ -917,10 +917,6 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
     )
   }
 
-  console.log('Sending refresh token with', segments.length, 'segments, length:', cleanToken.length)
-  console.log('Segment lengths:', segments.map(s => s.length))
-
-  // Try sending the token as-is first
   let response: Response
   try {
     response = await fetch(TOKEN_REFRESH_URL, {
@@ -942,7 +938,6 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
 
   // If we got a 401 and the token has 4 segments, try with a trailing dot
   if (!response.ok && response.status === 401 && segments.length === 4) {
-    console.log('Retrying with 5 segments (appending dot)')
     const tokenWith5Segments = `${cleanToken}.`
     try {
       response = await fetch(TOKEN_REFRESH_URL, {
@@ -1149,7 +1144,6 @@ async function fetchSystemsForQuery(
 
   // If we have more results to fetch (cursor exists and we haven't fetched everything)
   if (nextCursor && allResults.length < totalCount) {
-    console.log(`Fetched ${allResults.length} of ${totalCount} systems for ${queryType}, fetching next page...`)
     return fetchSystemsForQuery(
       token,
       scope,
@@ -1160,7 +1154,6 @@ async function fetchSystemsForQuery(
     )
   }
 
-  console.log(`Fetched all ${allResults.length} systems for ${queryType}`)
   return allResults
 }
 
@@ -1267,7 +1260,6 @@ async function fetchWorkloads(
   const variables = { systemKey: [{ systemId }] }
 
   const requestBody = { query: WORKLOADS_QUERY, variables }
-  console.log('Workloads request:', requestBody)
 
   let response: Response
   try {
@@ -1289,7 +1281,6 @@ async function fetchWorkloads(
   }
 
   const payload = (await response.json()) as GraphQlResponse<StorageVolumesPageData>
-  console.log('Workloads response:', payload)
 
   if (payload.errors && payload.errors.length > 0) {
     console.warn('Workloads query errors:', payload.errors)
@@ -1297,7 +1288,6 @@ async function fetchWorkloads(
   }
 
   const volumes = payload.data?.systems?.systems[0]?.storageVolumes?.volumes ?? []
-  console.log(`Fetched ${volumes.length} storage volumes`)
   const totalUsedKB = volumes.reduce((sum, v) => sum + (v.capacity?.usedKB ?? 0), 0)
   const totalSnapshotsKiB = volumes.reduce(
     (sum, v) => sum + (v.capacity?.logical?.usedSnapshotsKiB ?? 0),
@@ -1379,11 +1369,9 @@ async function fetchSystemsByFilters(
   const allResults = [...accumulated, ...systems]
 
   if (nextCursor && allResults.length < totalCount) {
-    console.log(`Fetched ${allResults.length} of ${totalCount} filtered systems, fetching next page...`)
     return fetchSystemsByFilters(token, scope, nextCursor, allResults)
   }
 
-  console.log(`Fetched all ${allResults.length} filtered systems`)
   return allResults
 }
 
@@ -1526,19 +1514,6 @@ async function fetchPerformanceData(
   }
 
   const url = `${PERFORMANCE_API_URL}?${params.toString()}`
-  console.log('Performance API request:', {
-    graphName,
-    isClusterGraph,
-    isNodeGraph,
-    node: {
-      hostName: node.hostName,
-      clusterId: clusterId,
-      serialNumber: node.serialNumber,
-      systemId: node.systemId,
-    },
-    url,
-    params: Object.fromEntries(params.entries()),
-  })
 
   const response = await fetch(url, {
     method: 'GET',
@@ -1562,7 +1537,6 @@ async function fetchPerformanceData(
   }
 
   const data = (await response.json()) as PerformanceResponse
-  console.log('Performance API success:', data.results.counterMetaData)
   return data
 }
 
@@ -2568,6 +2542,7 @@ function App() {
   const [watchlistsError, setWatchlistsError] = useState<string | null>(null)
   const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(() => Boolean(refreshToken))
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
+  const [pairPendingRemoval, setPairPendingRemoval] = useState<string | null>(null)
   const [results, setResults] = useState<SearchResultState>({
     pairs: [],
     totalCount: 0,
@@ -2597,6 +2572,7 @@ function App() {
 
   const lastFetchedDates = useRef<{ startDateStr: string; endDateStr: string } | null>(null)
   const hasRestoredSelection = useRef(false)
+  const searchGenerationRef = useRef(0)
 
   const tokenRef = useRef(token)
   const pendingTokenRequestRef = useRef<Promise<string> | null>(null)
@@ -2922,61 +2898,71 @@ function App() {
       return
     }
 
-    let accessToken: string
-    try {
-      accessToken = await getAccessToken()
-    } catch (error) {
-      setSearchError(
-        error instanceof Error
-          ? `Failed to get access token: ${error.message}`
-          : 'Failed to get access token.',
-      )
-      return
-    }
-
+    const generation = ++searchGenerationRef.current
     setIsLoading(true)
     setSearchError(null)
     setSearchPage(1)
 
     try {
-      const nextResults = await searchSystems(accessToken, searchForm)
-      setResults(nextResults)
-    } catch (error) {
-      console.error('Search error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Search failed with unknown error.'
-      
-      // On 401 or token expiration, try refreshing the access token and retry
-      const isTokenExpired = errorMessage.includes('401') || 
-                            errorMessage.toLowerCase().includes('token is expired') ||
-                            errorMessage.toLowerCase().includes('expired token')
-      
-      if (isTokenExpired) {
-        try {
-          const newAccessToken = await renewAccessToken(accessToken)
-          
-          const nextResults = await searchSystems(newAccessToken, searchForm)
-          setResults(nextResults)
-          return
-        } catch (refreshError) {
-          setSearchError(
-            refreshError instanceof Error
-              ? `Token refresh failed: ${refreshError.message}`
-              : 'Token refresh failed.',
-          )
-        }
-      } else if (errorMessage.includes('429')) {
-        setSearchError('Rate exceeded, please wait 5 minutes.')
-      } else {
-        setSearchError(errorMessage)
+      let accessToken: string
+      try {
+        accessToken = await getAccessToken()
+      } catch (error) {
+        if (generation !== searchGenerationRef.current) return
+        setSearchError(
+          error instanceof Error
+            ? `Failed to get access token: ${error.message}`
+            : 'Failed to get access token.',
+        )
+        return
       }
 
-      setResults({
-        pairs: [],
-        totalCount: 0,
-        siteFilterWasClientSide: false,
-      })
+      try {
+        const nextResults = await searchSystems(accessToken, searchForm)
+        if (generation !== searchGenerationRef.current) return
+        setResults(nextResults)
+      } catch (error) {
+        if (generation !== searchGenerationRef.current) return
+        console.error('Search error:', error)
+        const errorMessage = error instanceof Error ? error.message : 'Search failed with unknown error.'
+
+        // On 401 or token expiration, try refreshing the access token and retry
+        const isTokenExpired = errorMessage.includes('401') ||
+          errorMessage.toLowerCase().includes('token is expired') ||
+          errorMessage.toLowerCase().includes('expired token')
+
+        if (isTokenExpired) {
+          try {
+            const newAccessToken = await renewAccessToken(accessToken)
+
+            const nextResults = await searchSystems(newAccessToken, searchForm)
+            if (generation !== searchGenerationRef.current) return
+            setResults(nextResults)
+            return
+          } catch (refreshError) {
+            if (generation !== searchGenerationRef.current) return
+            setSearchError(
+              refreshError instanceof Error
+                ? `Token refresh failed: ${refreshError.message}`
+                : 'Token refresh failed.',
+            )
+          }
+        } else if (errorMessage.includes('429')) {
+          setSearchError('Rate exceeded, please wait 5 minutes.')
+        } else {
+          setSearchError(errorMessage)
+        }
+
+        setResults({
+          pairs: [],
+          totalCount: 0,
+          siteFilterWasClientSide: false,
+        })
+      }
     } finally {
-      setIsLoading(false)
+      if (generation === searchGenerationRef.current) {
+        setIsLoading(false)
+      }
     }
   }
 
@@ -3026,8 +3012,23 @@ function App() {
     })
   }
 
+  const pairPendingRemovalLabel = (() => {
+    if (!pairPendingRemoval) return ''
+    const pair = savedPairs.find((entry) => entry.key === pairPendingRemoval)
+    return pair?.node1.hostName || pair?.node1.serialNumber || pairPendingRemoval
+  })()
+
   const handleRemovePair = (key: string) => {
-    setSavedPairs((current) => current.filter((pair) => pair.key !== key))
+    setPairPendingRemoval(key)
+  }
+
+  const confirmRemovePair = () => {
+    const key = pairPendingRemoval
+    setPairPendingRemoval(null)
+    if (!key) {
+      return
+    }
+    setSavedPairs((current) => current.filter((entry) => entry.key !== key))
   }
 
   const handleDeleteNagp = (nagpId: string) => {
@@ -3359,6 +3360,30 @@ function App() {
         <Alert color="red" title="Import failed">
           {browserDataError}
         </Alert>
+      </Modal>
+      <Modal
+        opened={pairPendingRemoval !== null}
+        onClose={() => setPairPendingRemoval(null)}
+        title="Remove saved HA pair"
+        centered
+      >
+        <Stack>
+          <Text size="sm">
+            Remove{' '}
+            <Text span fw={600}>
+              {pairPendingRemovalLabel}
+            </Text>{' '}
+            from your saved HA pairs?
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPairPendingRemoval(null)}>
+              Cancel
+            </Button>
+            <Button color="red" onClick={confirmRemovePair}>
+              Remove
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
       <Modal
         opened={tokenModalOpened}
