@@ -14,6 +14,7 @@ import {
   Divider,
   Group,
   Indicator,
+  Loader,
   Menu,
   Modal,
   MultiSelect,
@@ -2565,7 +2566,7 @@ function App() {
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
   const [watchlists, setWatchlists] = useState<Watchlist[]>([])
   const [watchlistsError, setWatchlistsError] = useState<string | null>(null)
-  const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(false)
+  const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(() => Boolean(refreshToken))
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
   const [results, setResults] = useState<SearchResultState>({
     pairs: [],
@@ -3405,6 +3406,7 @@ function App() {
                     setDraftRefreshToken('')
                     setWatchlists([])
                     setWatchlistsError(null)
+                    setIsWatchlistsLoading(false)
                   }}
                 >
                   Remove token
@@ -3581,11 +3583,14 @@ function App() {
                               onChange={(value) => handleFieldChange('customer', value || '')}
                               clearable
                               searchable
+                              withAlignedLabels
                               nothingFoundMessage="No NAGPs stored"
                             />
                             <Select
                               label="Watchlist"
-                              placeholder="Select watchlist"
+                              placeholder={
+                                isWatchlistsLoading ? 'Loading watchlists...' : 'Select watchlist'
+                              }
                               data={watchlists.map((watchlist) => ({
                                 value: watchlist.id,
                                 label: watchlist.isDefault
@@ -3599,6 +3604,10 @@ function App() {
                               withAlignedLabels
                               disabled={isWatchlistsLoading || !!watchlistsError}
                               error={watchlistsError}
+                              rightSection={
+                                isWatchlistsLoading ? <Loader size="xs" /> : undefined
+                              }
+                              rightSectionPointerEvents={isWatchlistsLoading ? 'none' : undefined}
                               nothingFoundMessage="No watchlists found"
                             />
                             <TextInput
