@@ -3653,7 +3653,7 @@ function App() {
           {refreshToken && (
           <Container size="xl">
             <Stack gap="lg">
-              <Tabs value={activeTab} onChange={handleTabChange} keepMounted={false}>
+              <Tabs value={activeTab} onChange={handleTabChange}>
                 <Tabs.List>
                   <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
                     Search
