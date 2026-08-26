@@ -210,6 +210,16 @@ const QUERY_BY_CLUSTER = `
   }
 `
 
+const QUERY_BY_CLUSTER_ID = `
+  query SearchByClusterId($pageSize: Int!, $clusterId: String, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, clusterId: $clusterId, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
+      totalCount
+      cursor
+      systems {${SYSTEMS_FIELDS}    }
+    }
+  }
+`
+
 const QUERY_BY_HOSTNAME = `
   query SearchByHostName($pageSize: Int!, $hostName: String, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
     systems(pageSize: $pageSize, hostName: $hostName, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after, caseInsensitiveFields: [hostName]) {
@@ -268,7 +278,7 @@ type SearchForm = {
   query: string
 }
 
-type SearchQueryType = 'cluster' | 'serialNumber' | 'systemId' | 'hostName'
+type SearchQueryType = 'cluster' | 'clusterId' | 'serialNumber' | 'systemId' | 'hostName'
 
 type Watchlist = {
   id: string
@@ -890,6 +900,8 @@ function buildQueryVariables(
 
   if (queryType === 'cluster') {
     return [QUERY_BY_CLUSTER, { ...base, clusterName: queryValue }]
+  } else if (queryType === 'clusterId') {
+    return [QUERY_BY_CLUSTER_ID, { ...base, clusterId: queryValue }]
   } else if (queryType === 'serialNumber') {
     return [QUERY_BY_SYSTEM_KEY, { ...base, systemKey: [{ serialNumber: queryValue }] }]
   } else if (queryType === 'systemId') {
@@ -1719,22 +1731,41 @@ function CustomerHeader({
 function ClusterBlock<T extends HAPair | SavedHAPair>({
   clusterGroup,
   renderPair,
+  onAddCluster,
+  isAddingCluster,
+  clusterAddDisabled,
 }: {
   clusterGroup: ClusterGroup<T>
   renderPair: (pair: T) => ReactNode
+  onAddCluster?: () => void
+  isAddingCluster?: boolean
+  clusterAddDisabled?: boolean
 }) {
   return (
     <Paper withBorder radius="md" p="md">
       <Stack gap="xs">
-        {clusterGroup.clusterName ? (
-          <CopyableText fw={600} size="sm" textToCopy={clusterGroup.clusterName}>
-            {clusterGroup.clusterName}
-          </CopyableText>
-        ) : (
-          <Text fw={600} size="sm">
-            No cluster
-          </Text>
-        )}
+        <Group gap="xs" wrap="nowrap">
+          {clusterGroup.clusterName ? (
+            <CopyableText fw={600} size="sm" textToCopy={clusterGroup.clusterName}>
+              {clusterGroup.clusterName}
+            </CopyableText>
+          ) : (
+            <Text fw={600} size="sm">
+              No cluster
+            </Text>
+          )}
+          {onAddCluster ? (
+            <Button
+              size="compact-xs"
+              variant="light"
+              loading={isAddingCluster}
+              disabled={clusterAddDisabled}
+              onClick={onAddCluster}
+            >
+              Add
+            </Button>
+          ) : null}
+        </Group>
         {clusterGroup.pairs.map((pair) => (
           <div key={pair.key}>
             {renderPair(pair)}
@@ -2627,6 +2658,8 @@ function App() {
   })
   const [isLoading, setIsLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [savingClusterId, setSavingClusterId] = useState<string | null>(null)
+  const [clusterSaveError, setClusterSaveError] = useState<string | null>(null)
   const [searchResultTags, setSearchResultTags] = useState<Map<string, string[]>>(new Map())
   const [performanceData, setPerformanceData] = useState<Map<string, ChartDataPoint[]>>(new Map())
   const [performanceLoading, setPerformanceLoading] = useState<Set<string>>(new Set())
@@ -2978,6 +3011,7 @@ function App() {
     const generation = ++searchGenerationRef.current
     setIsLoading(true)
     setSearchError(null)
+    setClusterSaveError(null)
     setSearchPage(1)
 
     try {
@@ -3087,6 +3121,92 @@ function App() {
       }
       return [nextPair, ...current]
     })
+  }
+
+  const handleSaveCluster = async (clusterId: string) => {
+    if (!refreshToken) {
+      setClusterSaveError('Set a refresh token first with the key button in the toolbar.')
+      return
+    }
+
+    setSavingClusterId(clusterId)
+    setClusterSaveError(null)
+
+    try {
+      let accessToken = await getAccessToken()
+
+      const fetchClusterSystems = (token: string) =>
+        fetchSystemsForQuery(token, EMPTY_SEARCH_SCOPE, 'clusterId', clusterId)
+
+      let systems: SystemSummary[]
+      try {
+        systems = await fetchClusterSystems(accessToken)
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Cluster search failed.'
+        const isTokenExpired = errorMessage.includes('401') ||
+          errorMessage.toLowerCase().includes('token is expired') ||
+          errorMessage.toLowerCase().includes('expired token')
+
+        if (!isTokenExpired) {
+          throw error
+        }
+
+        accessToken = await renewAccessToken(accessToken)
+        systems = await fetchClusterSystems(accessToken)
+      }
+
+      const systemMap = new Map<string, SystemSummary>()
+      for (const system of systems) {
+        if (!systemMap.has(system.serialNumber)) {
+          systemMap.set(system.serialNumber, system)
+        }
+      }
+
+      const pairs = groupIntoHAPairs(Array.from(systemMap.values()))
+      if (pairs.length === 0) {
+        setClusterSaveError('No systems found for this cluster.')
+        return
+      }
+
+      const draftTagsByPair = searchResultTags
+      setSavedPairs((current) => {
+        const existingByKey = new Map(current.map((entry) => [entry.key, entry]))
+        const additions: SavedHAPair[] = []
+        const updates = new Map<string, SavedHAPair>()
+        const savedAt = new Date().toISOString()
+
+        for (const pair of pairs) {
+          const [node1, node2] = addClusterNameToNodes(pair.node1, pair.node2)
+          const automaticTags = getAutomaticTagsForPair(pair)
+          const existing = existingByKey.get(pair.key)
+
+          if (existing) {
+            updates.set(pair.key, {
+              ...existing,
+              node1,
+              node2,
+              tags: normalizeTags(existing.tags, automaticTags),
+            })
+          } else {
+            additions.push({
+              key: pair.key,
+              node1,
+              node2,
+              savedAt,
+              tags: normalizeTags(draftTagsByPair.get(pair.key) ?? [], automaticTags),
+            })
+          }
+        }
+
+        return [...additions, ...current.map((entry) => updates.get(entry.key) ?? entry)]
+      })
+    } catch (error) {
+      setClusterSaveError(
+        error instanceof Error ? error.message : 'Failed to add cluster.',
+      )
+    } finally {
+      setSavingClusterId(null)
+    }
   }
 
   const pairPendingRemovalLabel = (() => {
@@ -3767,6 +3887,7 @@ function App() {
                     </Paper>
 
                     {searchError ? <Alert color="red">{searchError}</Alert> : null}
+                    {clusterSaveError ? <Alert color="red">{clusterSaveError}</Alert> : null}
 
                     {results.siteFilterWasClientSide ? (
                       <Alert color="blue" title="Customer site filter">
@@ -3823,6 +3944,14 @@ function App() {
                                   <ClusterBlock
                                     key={clusterIndex}
                                     clusterGroup={clusterGroup}
+                                    onAddCluster={clusterGroup.clusterId
+                                      ? () => void handleSaveCluster(clusterGroup.clusterId!)
+                                      : undefined}
+                                    isAddingCluster={savingClusterId === clusterGroup.clusterId}
+                                    clusterAddDisabled={
+                                      savingClusterId !== null &&
+                                      savingClusterId !== clusterGroup.clusterId
+                                    }
                                     renderPair={(pair) => {
                                       const isSaved = savedPairMap.has(pair.key)
                                       const pairTags = normalizeTags(
