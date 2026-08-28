@@ -1675,6 +1675,21 @@ function consolidateChartDataPerNode(
   return result
 }
 
+// Nodes whose data starts partway through the range have no keys on the earliest
+// rows, so series must be collected across every point rather than just the first.
+function collectSeriesKeys(data: ChartDataPoint[]): string[] {
+  const keys: string[] = []
+  const seen = new Set<string>()
+  for (const point of data) {
+    for (const key of Object.keys(point)) {
+      if (key === 'timestamp' || key === '__epochMs' || seen.has(key)) continue
+      seen.add(key)
+      keys.push(key)
+    }
+  }
+  return keys
+}
+
 function CustomerHeader({
   group,
   onSaveNagp,
@@ -4336,7 +4351,7 @@ function App() {
                                     }
 
                                     const buildSeries = (data: ChartDataPoint[]) => {
-                                      const keys = Object.keys(data[0]).filter((key) => key !== 'timestamp' && key !== '__epochMs')
+                                      const keys = collectSeriesKeys(data)
                                       
                                       // Filter out Headroom when showHeadroom is false for CPU graph
                                       const filteredKeys = keys.filter((key) => {
@@ -4489,15 +4504,13 @@ function App() {
                                                 strokeWidth={1}
                                                 withGradient={false}
                                                 series={(() => {
-                                                  const keys = Object.keys(chartData[0])
-                                                    .filter((key) => key !== 'timestamp' && key !== '__epochMs')
-                                                    .filter((key) => {
-                                                      // When stacking, only show CPU Utilization metrics
-                                                      if (!key.includes('CPU Utilization')) {
-                                                        return false
-                                                      }
-                                                      return true
-                                                    })
+                                                  const keys = collectSeriesKeys(chartData).filter((key) => {
+                                                    // When stacking, only show CPU Utilization metrics
+                                                    if (!key.includes('CPU Utilization')) {
+                                                      return false
+                                                    }
+                                                    return true
+                                                  })
                                                   const isPerNode = keys.some((key) => key.includes(' – '))
                                                   if (isPerNode) {
                                                     const NODE_COLOR_FAMILIES = [
@@ -4544,15 +4557,13 @@ function App() {
                                                 withGradient={false}
                                                 type={isGraphStacked || (stackLines && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
                                                 series={(() => {
-                                                  const keys = Object.keys(chartData[0])
-                                                    .filter((key) => key !== 'timestamp' && key !== '__epochMs')
-                                                    .filter((key) => {
-                                                      // Filter out Headroom when showHeadroom is false for CPU graph
-                                                      if (graph.name === 'node_headroom_cpu_utilization' && !showHeadroom && key.includes('Headroom')) {
-                                                        return false
-                                                      }
-                                                      return true
-                                                    })
+                                                  const keys = collectSeriesKeys(chartData).filter((key) => {
+                                                    // Filter out Headroom when showHeadroom is false for CPU graph
+                                                    if (graph.name === 'node_headroom_cpu_utilization' && !showHeadroom && key.includes('Headroom')) {
+                                                      return false
+                                                    }
+                                                    return true
+                                                  })
                                                   const isPerNode = keys.some((key) => key.includes(' – '))
                                                   if (isPerNode) {
                                                     const NODE_COLOR_FAMILIES = [
