@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun ./index.html",
-    "build": "tsc -b && bun build ./index.html --minify --outdir=dist",
+    "build": "tsc -b && bun ./scripts/build.ts",
     "lint": "oxlint",
     "preview": "bun ./scripts/preview.ts"
   },

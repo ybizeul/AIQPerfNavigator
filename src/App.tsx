@@ -86,6 +86,13 @@ const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
 const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
 const COLOR_SCHEME_LABELS = { auto: 'system', light: 'light', dark: 'dark' } as const
 const NEXT_COLOR_SCHEME = { auto: 'light', light: 'dark', dark: 'auto' } as const
+const DEVELOPMENT_BUILD_INFO: BuildInfo = {
+  version: '0.0.0-dev',
+  isTagged: false,
+  releases: [],
+}
+const BUILD_INFO =
+  typeof __AIQ_BUILD_INFO__ === 'undefined' ? DEVELOPMENT_BUILD_INFO : __AIQ_BUILD_INFO__
 
 type BrowserDataExport = {
   format: typeof BROWSER_DATA_FORMAT
@@ -3252,6 +3259,8 @@ function App() {
   const { colorScheme, setColorScheme } = useMantineColorScheme()
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
+  const [versionModalOpened, { open: openVersionModal, close: closeVersionModal }] =
+    useDisclosure(false)
   const browserDataInputRef = useRef<HTMLInputElement>(null)
   const [browserDataError, setBrowserDataError] = useState<string | null>(null)
   const [token, setToken] = useLocalStorage({
@@ -3709,7 +3718,7 @@ function App() {
     try {
       const parsedData: unknown = JSON.parse(await file.text())
       if (!isBrowserDataExport(parsedData)) {
-        throw new Error('The selected file is not a valid AIQ Perf Navigator backup.')
+        throw new Error('The selected file is not a valid AIQ Navigator backup.')
       }
 
       const shouldImport = window.confirm(
@@ -4387,6 +4396,63 @@ function App() {
         onChange={handleBrowserDataImport}
       />
       <Modal
+        opened={versionModalOpened}
+        onClose={closeVersionModal}
+        title="Changelog"
+        centered
+        size="lg"
+      >
+        <ScrollArea.Autosize mah="70vh" type="auto">
+          <Stack gap="lg">
+            <Text size="sm" c="dimmed">
+              Current version: {BUILD_INFO.version}
+            </Text>
+            {BUILD_INFO.releases.length === 0 ? (
+              <Text size="sm">No changelog yet. Entries appear from the second tagged release.</Text>
+            ) : (
+              BUILD_INFO.releases.map((release) => (
+                <Stack key={release.version} gap="xs">
+                  <Group gap="xs">
+                    <Title order={4}>{release.version}</Title>
+                    {BUILD_INFO.isTagged && release.version === BUILD_INFO.version ? (
+                      <Badge size="sm" variant="light">
+                        Current
+                      </Badge>
+                    ) : null}
+                  </Group>
+                  {release.changes.length === 0 ? (
+                    <Text size="sm" c="dimmed">
+                      No feature or fix entries.
+                    </Text>
+                  ) : (
+                    <Stack gap="xs">
+                      {release.changes.map((change, index) => (
+                        <Group
+                          key={`${release.version}-${change.type}-${index}`}
+                          gap="xs"
+                          align="flex-start"
+                          wrap="nowrap"
+                        >
+                          <Badge
+                            color={change.type === 'feat' ? 'blue' : 'teal'}
+                            variant="light"
+                            size="sm"
+                          >
+                            {change.type === 'feat' ? 'Feature' : 'Fix'}
+                          </Badge>
+                          <Text size="sm">{change.description}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  )}
+                  <Divider />
+                </Stack>
+              ))
+            )}
+          </Stack>
+        </ScrollArea.Autosize>
+      </Modal>
+      <Modal
         opened={browserDataError !== null}
         onClose={() => setBrowserDataError(null)}
         title="Browser data import"
@@ -4517,9 +4583,17 @@ function App() {
         <AppShell.Header>
           <Container size="xl" h="100%">
             <Group justify="space-between" align="center" h="100%">
-              <div>
-                <Title order={2}>AIQ Perf Navigator</Title>
-              </div>
+              <Group gap="xs" align="baseline">
+                <Title order={2}>AIQ Navigator</Title>
+                <UnstyledButton
+                  onClick={openVersionModal}
+                  aria-label={`Version ${BUILD_INFO.version}. Open changelog`}
+                >
+                  <Text size="xs" c="dimmed" td="underline">
+                    {BUILD_INFO.version}
+                  </Text>
+                </UnstyledButton>
+              </Group>
 
               <Group gap="sm">
                 <Tooltip label={`Appearance: ${COLOR_SCHEME_LABELS[colorScheme]}`}>
@@ -4591,7 +4665,7 @@ function App() {
             <Container size="sm" py="xl">
               <Stack gap="xl" align="center" mt="xl">
                 <Stack gap="xs" align="center">
-                  <Title order={2}>Welcome to AIQ Perf Navigator</Title>
+                  <Title order={2}>Welcome to AIQ Navigator</Title>
                   <Text c="dimmed" ta="center">
                     You need an Active IQ refresh token to continue. Generate one on the{' '}
                     <Anchor href="https://aiq.netapp.com/api" target="_blank" rel="noopener noreferrer">
