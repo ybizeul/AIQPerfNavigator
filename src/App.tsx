@@ -77,6 +77,7 @@ import {
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
 const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken'
+const REFRESH_TOKEN_HINT = 'From Active IQ. Stored only in this browser.'
 const PERFORMANCE_API_URL = 'https://api.activeiq.netapp.com/v1/performance-data/graphs'
 const WATCHLIST_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/list'
 const WATCHLIST_ACTION_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/action'
@@ -1055,6 +1056,18 @@ function matchesCustomerSite(system: SystemSummary, searchTerm: string) {
   )
 }
 
+function IncompleteTokenAlert({ value }: { value: string }) {
+  const parts = value.trim().split('.').length
+  if (!value.trim() || parts >= 4) return null
+
+  return (
+    <Alert color="yellow" title="This token looks incomplete">
+      A complete Active IQ refresh token is one long string. This paste has {parts}{' '}
+      {parts === 1 ? 'part' : 'parts'}; copy the whole token from Active IQ and try again.
+    </Alert>
+  )
+}
+
 async function refreshAccessToken(refreshToken: string): Promise<string> {
   // Clean the token - remove any whitespace that might have been introduced
   const cleanToken = refreshToken.replace(/\s/g, '')
@@ -1063,9 +1076,7 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
   const segments = cleanToken.split('.')
   if (segments.length < 4 || segments.length > 5) {
     throw new Error(
-      `Invalid refresh token format: expected 4 or 5 segments, got ${segments.length}. ` +
-      `Token length: ${cleanToken.length} characters. ` +
-      `Make sure you copied the entire refresh token.`
+      `This refresh token does not look complete (${segments.length} parts, ${cleanToken.length} characters). Copy the entire token from Active IQ and try again.`,
     )
   }
 
@@ -4208,52 +4219,36 @@ function App() {
       >
         <Stack>
           <Text size="sm" c="dimmed">
-            The refresh token is stored locally in this browser and used to obtain access tokens
-            from {TOKEN_REFRESH_URL}. Access tokens are fetched automatically when needed.
+            Paste a refresh token from Active IQ. It stays in this browser and is used only to
+            sign in here.
           </Text>
           <PasswordInput
             label="Refresh token"
             placeholder="Paste your refresh token"
-            description="JWE token used to obtain access tokens (4-5 segment format)"
+            description={REFRESH_TOKEN_HINT}
             value={draftRefreshToken}
             onChange={(event) => setDraftRefreshToken(event.currentTarget.value)}
           />
-          {draftRefreshToken && draftRefreshToken.trim().split('.').length < 4 ? (
-            <Alert color="yellow" title="Warning">
-              Refresh tokens should be in JWE format with 4-5 segments separated by dots. The current
-              token has {draftRefreshToken.trim().split('.').length} segments. Make sure you copied
-              the entire token correctly.
-            </Alert>
-          ) : null}
-          <Group justify="space-between">
-            <Button
-              variant="default"
-              onClick={() => {
-                setDraftRefreshToken('')
-              }}
-            >
-              Clear draft
-            </Button>
-            <Group>
-              {refreshToken ? (
-                <Button
-                  variant="default"
-                  color="red"
-                  onClick={() => {
-                    tokenRef.current = ''
-                    setToken('')
-                    setRefreshToken('')
-                    setDraftRefreshToken('')
-                    setWatchlists([])
-                    setWatchlistsError(null)
-                    setIsWatchlistsLoading(false)
-                  }}
-                >
-                  Remove token
-                </Button>
-              ) : null}
-              <Button onClick={handleTokenSave}>Save token</Button>
-            </Group>
+          <IncompleteTokenAlert value={draftRefreshToken} />
+          <Group justify="flex-end">
+            {refreshToken ? (
+              <Button
+                variant="default"
+                color="red"
+                onClick={() => {
+                  tokenRef.current = ''
+                  setToken('')
+                  setRefreshToken('')
+                  setDraftRefreshToken('')
+                  setWatchlists([])
+                  setWatchlistsError(null)
+                  setIsWatchlistsLoading(false)
+                }}
+              >
+                Remove token
+              </Button>
+            ) : null}
+            <Button onClick={handleTokenSave}>Save token</Button>
           </Group>
         </Stack>
       </Modal>
@@ -4392,11 +4387,11 @@ function App() {
                 <Stack gap="xs" align="center">
                   <Title order={2}>Welcome to AIQ Perf Navigator</Title>
                   <Text c="dimmed" ta="center">
-                    You need to configure an ActiveIQ refresh token before continuing. Go to the{' '}
+                    You need an Active IQ refresh token to continue. Generate one on the{' '}
                     <Anchor href="https://aiq.netapp.com/api" target="_blank" rel="noopener noreferrer">
                       AIQ website
                     </Anchor>
-                    {' '}to generate a token and paste it here.
+                    {' '}and paste it here. It stays in this browser.
                   </Text>
                 </Stack>
                 <Paper withBorder radius="lg" p="lg" style={{ width: '100%' }}>
@@ -4404,17 +4399,11 @@ function App() {
                     <PasswordInput
                       label="Refresh token"
                       placeholder="Paste your refresh token"
-                      description="JWE token used to obtain access tokens (4-5 segment format)"
+                      description={REFRESH_TOKEN_HINT}
                       value={draftRefreshToken}
                       onChange={(event) => setDraftRefreshToken(event.currentTarget.value)}
                     />
-                    {draftRefreshToken && draftRefreshToken.trim().split('.').length < 4 ? (
-                      <Alert color="yellow" title="Warning">
-                        Refresh tokens should be in JWE format with 4-5 segments separated by dots. The current
-                        token has {draftRefreshToken.trim().split('.').length} segments. Make sure you copied
-                        the entire token correctly.
-                      </Alert>
-                    ) : null}
+                    <IncompleteTokenAlert value={draftRefreshToken} />
                     <Button
                       onClick={handleTokenSave}
                       disabled={!draftRefreshToken.trim()}
@@ -4620,12 +4609,12 @@ function App() {
                     {clusterSaveError ? <Alert color="red">{clusterSaveError}</Alert> : null}
 
                     {results.siteFilterWasClientSide ? (
-                      <Alert color="blue" title="Customer site filter">
-                        The schema exposes site data on each returned system, but not a dedicated
-                        site-name search field on `systems`. The customer-site match is therefore
-                        applied client-side to the fetched result set.
+                      <Alert color="blue" title="Customer site is checked after search">
+                        Customer site is applied to the systems that came back, not as part of
+                        the search itself. If the pair you want is not on this page, add a serial,
+                        cluster, or hostname.
                         {onlySiteFilterIsUsed
-                          ? ' Using only a customer-site filter may require narrowing the search further if the first page does not contain the expected system.'
+                          ? ' Searching by site alone can miss systems that are further down the result list.'
                           : ''}
                       </Alert>
                     ) : null}
