@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DateTimePicker } from '@mantine/dates'
 import '@mantine/dates/styles.css'
 import './App.css'
@@ -36,7 +36,6 @@ import {
   Switch,
   Table,
   Tabs,
-  TagsInput,
   Text,
   TextInput,
   ThemeIcon,
@@ -601,6 +600,10 @@ const PERFORMANCE_GRAPHS: PerformanceGraphConfig[] = [
   },
 ]
 
+// Graphs whose own series (protocols, network directions) can be stacked even for a
+// single node. Every graph can additionally stack per node once several pairs are shown.
+const STACKABLE_GRAPHS = ['node_protocol_iops', 'node_network_throughput']
+
 // Within-bucket aggregation: how to reduce multiple sub-hourly raw samples into a single
 // representative hourly value. Defaults to 'average'; headroom uses 'min' so that the
 // worst-case (peak utilisation) moment in each hour is preserved rather than smoothed away.
@@ -610,6 +613,10 @@ const BUCKET_AGGREGATION: Record<string, 'average' | 'min' | 'max'> = {
 }
 
 const AUTOMATIC_TAG_PREFIX = '_'
+const CREATE_TAG_OPTION = '$create-tag'
+const METROCLUSTER_TAG = '_metrocluster'
+const RESERVED_TAG_LABELS = ['aff', 'fas', 'cvo', 'metrocluster'] as const
+const RESERVED_TAG_LABEL_SET = new Set<string>(RESERVED_TAG_LABELS)
 const AUTOMATIC_MODEL_TAGS = [
   { modelPrefix: 'aff', tag: '_aff' },
   { modelPrefix: 'fas', tag: '_fas' },
@@ -649,6 +656,30 @@ function getTagLabel(tag: string) {
   return isAutomaticTag(tag) ? tag.slice(AUTOMATIC_TAG_PREFIX.length) : tag
 }
 
+function getReservedTagKey(tag: string) {
+  let result = tag.trim()
+  while (result.startsWith(AUTOMATIC_TAG_PREFIX)) {
+    result = result.slice(AUTOMATIC_TAG_PREFIX.length)
+  }
+  return result.toLowerCase()
+}
+
+function isReservedCustomTag(tag: string) {
+  const trimmed = tag.trim()
+  if (trimmed.length === 0) {
+    return false
+  }
+  return trimmed.startsWith(AUTOMATIC_TAG_PREFIX) || RESERVED_TAG_LABEL_SET.has(getReservedTagKey(trimmed))
+}
+
+function getReservedTagHint(tag: string) {
+  const trimmed = tag.trim()
+  if (trimmed.startsWith(AUTOMATIC_TAG_PREFIX)) {
+    return 'Names starting with "_" are reserved for automatic tags. Try a name without an underscore.'
+  }
+  return `"${getReservedTagKey(trimmed)}" is reserved for automatic tags. Try a different name.`
+}
+
 function compareTags(left: string, right: string) {
   const labelComparison = getTagLabel(left).localeCompare(getTagLabel(right), undefined, {
     sensitivity: 'base',
@@ -670,7 +701,7 @@ function getAutomaticTagsForModel(modelName: string | null | undefined): string[
 function normalizeTags(tags: string[], automaticTags: string[] = []) {
   return Array.from(
     new Set([
-      ...tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0 && !isAutomaticTag(tag)),
+      ...tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0 && !isReservedCustomTag(tag)),
       ...automaticTags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
     ]),
   ).sort(compareTags)
@@ -2036,46 +2067,191 @@ function TagsEditor({
   onChange: (value: string[]) => void
   allTags: string[]
 }) {
-  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const reservedHintId = useId()
+  const combobox = useCombobox({
+    onDropdownClose: () => combobox.resetSelectedOption(),
+  })
+
+  // Derived from the typed text so the hint appears as soon as a reserved
+  // name is typed, and disappears as soon as it is edited away.
+  const reservedHint =
+    search.trim().length > 0 && isReservedCustomTag(search) ? getReservedTagHint(search) : null
 
   const automaticTags = value.filter(isAutomaticTag)
-  const manualTags = value.filter((tag) => !isAutomaticTag(tag))
-  const availableTags = allTags.filter((tag) => !isAutomaticTag(tag))
+  const manualTags = value.filter((tag) => !isAutomaticTag(tag) && !isReservedCustomTag(tag))
+  const availableTags = allTags.filter((tag) => !isReservedCustomTag(tag))
 
-  const handleChange = (nextTags: string[]) => {
-    setError(
-      nextTags.some((tag) => isAutomaticTag(tag.trim()))
-        ? 'Tags starting with "_" are reserved for automatic model tags.'
-        : null,
-    )
-    onChange(normalizeTags(nextTags, automaticTags))
+  const applyManualTags = (nextManualTags: string[]) => {
+    onChange(normalizeTags(nextManualTags, automaticTags))
   }
 
-  const automaticTagPills = automaticTags.map((item) => (
-    <Pill key={item} color={getTagColor(item)}>
-      {getTagLabel(item)}
-    </Pill>
-  ))
+  const handleAddTag = (rawTag: string) => {
+    const tag = rawTag.trim()
+    if (tag.length === 0) {
+      return
+    }
+    if (isReservedCustomTag(tag)) {
+      combobox.openDropdown()
+      return
+    }
+    setSearch('')
+    if (!manualTags.includes(tag)) {
+      applyManualTags([...manualTags, tag])
+    }
+  }
+
+  const handleRemoveTag = (tag: string) => {
+    applyManualTags(manualTags.filter((item) => item !== tag))
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      combobox.openDropdown()
+      combobox.selectNextOption()
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      combobox.selectPreviousOption()
+      return
+    }
+
+    if (event.key === 'Escape') {
+      combobox.closeDropdown()
+      return
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (combobox.getSelectedOptionIndex() >= 0) {
+        combobox.clickSelectedOption()
+      } else {
+        handleAddTag(search)
+      }
+      return
+    }
+
+    if (event.key === 'Backspace' && search.length === 0 && manualTags.length > 0) {
+      event.preventDefault()
+      handleRemoveTag(manualTags[manualTags.length - 1])
+    }
+  }
+
+  const normalizedSearch = search.trim().toLowerCase()
+  const options = availableTags.filter(
+    (tag) => !manualTags.includes(tag) && tag.toLowerCase().includes(normalizedSearch),
+  )
+  const canCreate =
+    search.trim().length > 0 &&
+    !isReservedCustomTag(search.trim()) &&
+    ![...manualTags, ...availableTags].some((tag) => tag.toLowerCase() === normalizedSearch)
 
   return (
     <Stack gap={4}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--mantine-spacing-xs)' }}>
-        {automaticTagPills.length > 0 ? (
-          <Group gap={4} wrap="wrap" style={{ flexShrink: 0, paddingTop: 6 }}>
-            {automaticTagPills}
-          </Group>
-        ) : null}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <TagsInput
-            placeholder="Pick tag from list"
-            data={availableTags}
-            value={manualTags}
-            onChange={handleChange}
-            clearable
-          />
-        </div>
-      </div>
-      {error ? <Text size="xs" c="red">{error}</Text> : null}
+      <Combobox
+        store={combobox}
+        onOptionSubmit={(optionValue) => {
+          handleAddTag(optionValue === CREATE_TAG_OPTION ? search : optionValue)
+          combobox.updateSelectedOptionIndex('active')
+        }}
+      >
+        <Combobox.DropdownTarget>
+          <PillsInput
+            rightSection={
+              manualTags.length > 0 ? (
+                <ActionIcon
+                  size="sm"
+                  variant="subtle"
+                  color="gray"
+                  aria-label="Clear tags"
+                  onClick={() => applyManualTags([])}
+                >
+                  <IconX size={14} />
+                </ActionIcon>
+              ) : null
+            }
+            rightSectionPointerEvents="all"
+            onClick={() => combobox.openDropdown()}
+          >
+            <Pill.Group>
+              {automaticTags.map((tag) => (
+                <Tooltip
+                  key={tag}
+                  label={tag === METROCLUSTER_TAG ? 'From MetroCluster' : 'From hardware model'}
+                >
+                  <Pill styles={{ label: { display: 'flex', alignItems: 'center', gap: 4 } }}>
+                    <IconLock size={10} aria-hidden style={{ flexShrink: 0 }} />
+                    {getTagLabel(tag)}
+                  </Pill>
+                </Tooltip>
+              ))}
+              {manualTags.map((tag) => (
+                <Pill key={tag} withRemoveButton onRemove={() => handleRemoveTag(tag)}>
+                  {tag}
+                </Pill>
+              ))}
+              <PillsInput.Field
+                placeholder="Add or choose a tag"
+                value={search}
+                aria-invalid={reservedHint ? true : undefined}
+                aria-describedby={reservedHint ? reservedHintId : undefined}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value)
+                  combobox.openDropdown()
+                  combobox.updateSelectedOptionIndex()
+                }}
+                onFocus={() => combobox.openDropdown()}
+                onBlur={() => combobox.closeDropdown()}
+                onKeyDown={handleKeyDown}
+              />
+            </Pill.Group>
+          </PillsInput>
+        </Combobox.DropdownTarget>
+
+        <Combobox.Dropdown>
+          {reservedHint ? (
+            <Group
+              gap={6}
+              wrap="nowrap"
+              align="flex-start"
+              p="xs"
+              id={reservedHintId}
+              role="status"
+            >
+              <IconLock
+                size={14}
+                style={{ color: 'var(--mantine-color-dimmed)', marginTop: 2, flexShrink: 0 }}
+              />
+              <Text size="xs" c="dimmed">
+                {reservedHint}
+              </Text>
+            </Group>
+          ) : null}
+          <Combobox.Options mah={220} style={{ overflowY: 'auto' }}>
+            {options.map((tag) => (
+              <Combobox.Option key={tag} value={tag}>
+                {tag}
+              </Combobox.Option>
+            ))}
+            {canCreate ? (
+              <Combobox.Option value={CREATE_TAG_OPTION}>
+                Create &quot;{search.trim()}&quot;
+              </Combobox.Option>
+            ) : null}
+            {options.length === 0 && !canCreate && !reservedHint ? (
+              <Combobox.Empty>No tags to add</Combobox.Empty>
+            ) : null}
+          </Combobox.Options>
+        </Combobox.Dropdown>
+      </Combobox>
+      {reservedHint ? (
+        <Text size="xs" c="dimmed">
+          {reservedHint}
+        </Text>
+      ) : null}
     </Stack>
   )
 }
@@ -2083,7 +2259,7 @@ function TagsEditor({
 function getAutomaticTagsForPair(pair: Pick<HAPair, 'node1'> | Pick<SavedHAPair, 'node1'>) {
   const tags = getAutomaticTagsForModel(pair.node1.hardwareModel?.name)
   if (pair.node1.isMetroCluster) {
-    tags.push('_metrocluster')
+    tags.push(METROCLUSTER_TAG)
   }
   return tags
 }
@@ -3147,11 +3323,7 @@ function App() {
   const [customEndDate, setCustomEndDate] = useState<Date | null>(null)
   const [searchPage, setSearchPage] = useState(1)
   const [showSavedOnly, setShowSavedOnly] = useState(false)
-  const [stackLines, setStackLines] = useState(true)
-  const [stackedGraphs, setStackedGraphs] = useState<Record<string, boolean>>({
-    node_protocol_iops: true,
-    node_network_throughput: true,
-  })
+  const [stackSeries, setStackSeries] = useState(true)
   const [showHeadroom, setShowHeadroom] = useState(false)
   const [refreshingCapacity, setRefreshingCapacity] = useState<Set<string>>(new Set())
   const [workloadsData, setWorkloadsData] = useState<Map<string, WorkloadsSummary>>(new Map())
@@ -3410,6 +3582,31 @@ function App() {
       result.set(graph.name, lttbDownsample(consolidateChartDataPerNode(datasets), CHART_MAX_POINTS))
     }
     return result
+  }, [performanceData, selectedPairKeys, savedPairMap])
+
+  // With several pairs every graph stacks per node. With one pair only the graphs
+  // that carry several series of their own can stack, and a node that reports a
+  // single series leaves nothing to stack at all.
+  const canStackCurrentGraphs = useMemo(() => {
+    if (selectedPairKeys.length === 0) return false
+    if (selectedPairKeys.length > 1) return true
+
+    const pair = savedPairMap.get(selectedPairKeys[0])
+    if (!pair) return false
+
+    const nodes = [pair.node1, pair.node2].filter(Boolean) as SystemSummary[]
+    let hasLoadedData = false
+    for (const graphName of STACKABLE_GRAPHS) {
+      for (const node of nodes) {
+        const data = performanceData.get(`${node.serialNumber}::${graphName}`)
+        if (!data || data.length === 0) continue
+        hasLoadedData = true
+        if (collectSeriesKeys(data).length > 1) return true
+      }
+    }
+
+    // Nothing has arrived yet, so keep the control live rather than flickering.
+    return !hasLoadedData
   }, [performanceData, selectedPairKeys, savedPairMap])
 
   const savedScopeEntries = useMemo(
@@ -4915,19 +5112,33 @@ function App() {
                                 minDate={customStartDate ?? undefined}
                                 maxDate={new Date()}
                               />
+                              <Tooltip
+                                multiline
+                                w={260}
+                                label={
+                                  canStackCurrentGraphs
+                                    ? selectedPairKeys.length > 1
+                                      ? 'Stacks each node on top of the others, and stacks protocol and network series within a graph.'
+                                      : 'Stacks the protocol and network series inside Protocol IOPs and Network Throughput.'
+                                    : 'This HA pair reports a single series per graph, so there is nothing to stack. Select another HA pair to stack nodes together.'
+                                }
+                              >
+                                <Switch
+                                  label="Stack series"
+                                  checked={stackSeries && canStackCurrentGraphs}
+                                  disabled={!canStackCurrentGraphs}
+                                  onChange={(event) => {
+                                    const stacked = event.currentTarget.checked
+                                    setStackSeries(stacked)
+                                    if (stacked && selectedPairKeys.length > 1) {
+                                      setShowHeadroom(false)
+                                    }
+                                  }}
+                                  size="sm"
+                                  pb={8}
+                                />
+                              </Tooltip>
                             </Group>
-                            {selectedPairKeys.length > 1 ? (
-                              <Switch
-                                label="Stack"
-                                checked={stackLines}
-                                onChange={(event) => {
-                                  const stacked = event.currentTarget.checked
-                                  setStackLines(stacked)
-                                  if (stacked) setShowHeadroom(false)
-                                }}
-                                size="sm"
-                              />
-                            ) : null}
 
                             {selectedPairKeys.length === 0 ? (
                               <Paper withBorder radius="md" p="xl">
@@ -4949,8 +5160,8 @@ function App() {
 
                                   {PERFORMANCE_GRAPHS.map((graph) => {
                                     const isSinglePair = selectedPairKeys.length === 1
-                                    const supportsStacking = ['node_protocol_iops', 'node_network_throughput'].includes(graph.name)
-                                    const isGraphStacked = stackedGraphs[graph.name] ?? false
+                                    const supportsStacking = STACKABLE_GRAPHS.includes(graph.name)
+                                    const isGraphStacked = supportsStacking && stackSeries
                                     const [singlePairKey] = selectedPairKeys
                                     const singlePair = isSinglePair ? savedPairMap.get(singlePairKey) : null
 
@@ -5074,32 +5285,20 @@ function App() {
                                                 {graph.description}
                                               </Text>
                                             </div>
-                                            <Group gap="md">
-                                              {supportsStacking ? (
-                                                <Switch
-                                                  label="Stack"
-                                                  checked={isGraphStacked}
-                                                  onChange={(event) => {
-                                                    const stacked = event.currentTarget.checked
-                                                    setStackedGraphs((current) => ({
-                                                      ...current,
-                                                      [graph.name]: stacked,
-                                                    }))
-                                                  }}
-                                                  size="sm"
-                                                />
-                                              ) : null}
-                                              {graph.name === 'node_headroom_cpu_utilization' ? (
+                                            {graph.name === 'node_headroom_cpu_utilization' ? (
+                                              <Tooltip
+                                                label="Unstack series to compare headroom against CPU utilization."
+                                                disabled={!(stackSeries && !isSinglePair)}
+                                              >
                                                 <Switch
                                                   label="Show headroom"
-                                                  description="Show Headroom metric"
                                                   checked={showHeadroom}
                                                   onChange={(event) => setShowHeadroom(event.currentTarget.checked)}
                                                   size="sm"
-                                                  disabled={stackLines && !isSinglePair}
+                                                  disabled={stackSeries && !isSinglePair}
                                                 />
-                                              ) : null}
-                                            </Group>
+                                              </Tooltip>
+                                            ) : null}
                                           </Group>
 
                                           {isSinglePair ? (
@@ -5162,7 +5361,7 @@ function App() {
                                           ) : isLoading ? (
                                             <Skeleton h={250} />
                                           ) : chartData && chartData.length > 0 ? (
-                                            graph.name === 'node_headroom_cpu_utilization' && stackLines ? (
+                                            graph.name === 'node_headroom_cpu_utilization' && stackSeries ? (
                                               <AreaChart
                                                 h={250}
                                                 data={chartData}
@@ -5222,7 +5421,7 @@ function App() {
                                                 dataKey="timestamp"
                                                 strokeWidth={1}
                                                 withGradient={false}
-                                                type={isGraphStacked || (stackLines && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
+                                                type={isGraphStacked || (stackSeries && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
                                                 series={(() => {
                                                   const keys = collectSeriesKeys(chartData).filter((key) => {
                                                     // Filter out Headroom when showHeadroom is false for CPU graph
