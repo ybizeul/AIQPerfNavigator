@@ -273,7 +273,7 @@ const CLUSTER_QUERY = `
 `
 
 type SearchForm = {
-  customer: string
+  scope: string
   watchlist: string
   query: string
 }
@@ -315,6 +315,28 @@ const EMPTY_SEARCH_SCOPE: SearchScope = {
   nagpId: '',
   watchlistId: '',
   customerId: '',
+}
+
+type ScopeKind = 'nagp' | 'customer'
+
+type ScopeSelection = {
+  kind: ScopeKind
+  id: string
+}
+
+function encodeScopeSelection(kind: ScopeKind, id: string) {
+  return `${kind}:${id}`
+}
+
+function parseScopeSelection(value: string): ScopeSelection | null {
+  const separatorIndex = value.indexOf(':')
+  if (separatorIndex < 1) return null
+
+  const kind = value.slice(0, separatorIndex)
+  const id = value.slice(separatorIndex + 1).trim()
+  if (!id || (kind !== 'nagp' && kind !== 'customer')) return null
+
+  return { kind, id }
 }
 
 type GraphQlError = {
@@ -361,7 +383,6 @@ type SystemSummary = {
   customer: {
     id: string | null
     name: string | null
-    cmatId: string | null
   } | null
   site: {
     id: string | null
@@ -609,7 +630,7 @@ function normalizeTags(tags: string[], automaticTags: string[] = []) {
 }
 
 const emptySearchForm: SearchForm = {
-  customer: '',
+  scope: '',
   watchlist: '',
   query: '',
 }
@@ -751,6 +772,7 @@ function pairSerialLabel(pair: HAPair | SavedHAPair) {
 }
 
 type CustomerGroup<T extends HAPair | SavedHAPair = HAPair | SavedHAPair> = {
+  customerId: string | null
   customerName: string | null
   siteName: string | null
   siteId: string | null
@@ -871,11 +893,13 @@ function groupPairsByCustomer<T extends HAPair | SavedHAPair>(pairs: T[]): Custo
   
   return sortedEntries.map(([, pairs]) => {
     // Use actual customer/site names from the first pair (preserve original casing)
+    const customerId = pairs[0]?.node1.customer?.id ?? null
     const customerName = pairs[0]?.node1.customer?.name ?? pairs[0]?.node1.nagp?.name ?? null
     const siteName = pairs[0]?.node1.site?.name ?? null
     const siteId = pairs[0]?.node1.site?.id ?? pairs[0]?.node1.site?.cmatId ?? null
-    const nagpId = pairs[0]?.node1.nagp?.id ?? pairs[0]?.node1.customer?.cmatId ?? null
+    const nagpId = pairs[0]?.node1.nagp?.id ?? null
     return {
+      customerId: customerId || null,
       customerName: customerName || null,
       siteName: siteName || null,
       siteId: siteId || null,
@@ -1070,23 +1094,31 @@ async function fetchWatchlistCustomerIds(token: string, watchlistId: string): Pr
 
 async function resolveSearchScopes(
   token: string,
-  nagpId: string,
+  selection: ScopeSelection | null,
   watchlistId: string,
 ): Promise<SearchScope[]> {
+  const nagpId = selection?.kind === 'nagp' ? selection.id : ''
+  const customerId = selection?.kind === 'customer' ? selection.id : ''
+
   if (!watchlistId) {
-    return [{ nagpId, watchlistId: '', customerId: '' }]
+    return [{ nagpId, watchlistId: '', customerId }]
   }
 
-  const customerIds = await fetchWatchlistCustomerIds(token, watchlistId)
-  if (customerIds.length > 0) {
-    return customerIds.map((customerId) => ({
+  const watchlistCustomerIds = await fetchWatchlistCustomerIds(token, watchlistId)
+  if (watchlistCustomerIds.length > 0) {
+    // A customer selection narrows the watchlist to that customer only.
+    const scopedCustomerIds = customerId
+      ? watchlistCustomerIds.filter((id) => id === customerId)
+      : watchlistCustomerIds
+
+    return scopedCustomerIds.map((id) => ({
       nagpId,
       watchlistId: '',
-      customerId,
+      customerId: id,
     }))
   }
 
-  return [{ nagpId, watchlistId, customerId: '' }]
+  return [{ nagpId, watchlistId, customerId }]
 }
 
 async function fetchSystemsForQuery(
@@ -1422,11 +1454,11 @@ async function fetchSystemsForScope(
 
 async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
   const query = normalizeValue(form.query)
-  const customer = normalizeValue(form.customer)
+  const selection = parseScopeSelection(normalizeValue(form.scope))
   const watchlist = normalizeValue(form.watchlist)
 
   // At least one search parameter is required
-  if (!query && !customer && !watchlist) {
+  if (!query && !selection && !watchlist) {
     return {
       pairs: [],
       totalCount: 0,
@@ -1434,7 +1466,15 @@ async function searchSystems(token: string, form: SearchForm): Promise<SearchRes
     }
   }
 
-  const scopes = await resolveSearchScopes(token, customer, watchlist)
+  const scopes = await resolveSearchScopes(token, selection, watchlist)
+  if (scopes.length === 0) {
+    return {
+      pairs: [],
+      totalCount: 0,
+      siteFilterWasClientSide: false,
+    }
+  }
+
   const scopedResults = await Promise.all(
     scopes.map((scope) => fetchSystemsForScope(token, scope, query)),
   )
@@ -1451,11 +1491,6 @@ async function searchSystems(token: string, form: SearchForm): Promise<SearchRes
   }
 
   let systems = Array.from(systemMap.values())
-
-  // Apply client-side customer filter if selected
-  if (customer) {
-    systems = systems.filter((system) => system.nagp?.id === customer || system.customer?.cmatId === customer)
-  }
 
   // Apply client-side customer site filter
   const filteredSystems = systems.filter((system) => matchesCustomerSite(system, query))
@@ -1690,12 +1725,42 @@ function collectSeriesKeys(data: ChartDataPoint[]): string[] {
   return keys
 }
 
+function SaveScopeButton({
+  label,
+  alreadySaved,
+  onSave,
+}: {
+  label: string
+  alreadySaved: boolean
+  onSave: () => void
+}) {
+  return (
+    <Tooltip label={alreadySaved ? 'Already in customers list' : `Add ${label} to customers list`}>
+      <ActionIcon
+        size="xs"
+        variant={alreadySaved ? 'light' : 'filled'}
+        color={alreadySaved ? 'teal' : 'green'}
+        radius="xl"
+        aria-label={`Add ${label} to customers list`}
+        onClick={onSave}
+        disabled={alreadySaved}
+      >
+        {alreadySaved ? <IconCheck size={10} /> : <IconPlus size={10} stroke={3} />}
+      </ActionIcon>
+    </Tooltip>
+  )
+}
+
 function CustomerHeader({
   group,
+  onSaveCustomer,
+  customerAlreadySaved,
   onSaveNagp,
   nagpAlreadySaved,
 }: {
   group: CustomerGroup
+  onSaveCustomer?: () => void
+  customerAlreadySaved?: boolean
   onSaveNagp?: () => void
   nagpAlreadySaved?: boolean
 }) {
@@ -1705,9 +1770,18 @@ function CustomerHeader({
         <IconBuilding size={16} />
       </ThemeIcon>
       <div>
-        <Text fw={600} size="sm">
-          {group.customerName || 'Unknown customer'}
-        </Text>
+        <Group gap={4}>
+          <Text fw={600} size="sm">
+            {group.customerName || 'Unknown customer'}
+          </Text>
+          {onSaveCustomer ? (
+            <SaveScopeButton
+              label="customer"
+              alreadySaved={!!customerAlreadySaved}
+              onSave={onSaveCustomer}
+            />
+          ) : null}
+        </Group>
         <Group gap="md">
           <Text size="xs" c="dimmed">
             Site: {group.siteName || 'Unknown'}{group.siteId ? ` (${group.siteId})` : ''}
@@ -1718,19 +1792,11 @@ function CustomerHeader({
                 {group.nagpName ? `${group.nagpName} (${group.nagpId})` : group.nagpId}
               </Text>
               {onSaveNagp ? (
-                <Tooltip label={nagpAlreadySaved ? 'Already in customers list' : 'Add to customers list'}>
-                  <ActionIcon
-                    size="xs"
-                    variant={nagpAlreadySaved ? 'light' : 'filled'}
-                    color={nagpAlreadySaved ? 'teal' : 'green'}
-                    radius="xl"
-                    aria-label="Add NAGP to customers list"
-                    onClick={onSaveNagp}
-                    disabled={nagpAlreadySaved}
-                  >
-                    {nagpAlreadySaved ? <IconCheck size={10} /> : <IconPlus size={10} stroke={3} />}
-                  </ActionIcon>
-                </Tooltip>
+                <SaveScopeButton
+                  label="NAGP"
+                  alreadySaved={!!nagpAlreadySaved}
+                  onSave={onSaveNagp}
+                />
               ) : null}
             </Group>
           ) : null}
@@ -2649,6 +2715,10 @@ function App() {
     key: 'aiq-system-organizer-nagp-mappings',
     defaultValue: {},
   })
+  const [customerMappings, setCustomerMappings] = useLocalStorage<Record<string, string>>({
+    key: 'aiq-system-organizer-customer-mappings',
+    defaultValue: {},
+  })
   const [metricsTagFilter, setMetricsTagFilter] = useLocalStorage<string[]>({
     key: 'aiq-system-organizer-metrics-tag-filter',
     defaultValue: [],
@@ -2928,9 +2998,41 @@ function App() {
     return result
   }, [performanceData, selectedPairKeys, savedPairMap])
 
+  const savedScopeEntries = useMemo(
+    () =>
+      [
+        ...Object.entries(customerMappings).map(([id, name]) => ({
+          kind: 'customer' as const,
+          id,
+          name,
+        })),
+        ...Object.entries(nagpMappings).map(([id, name]) => ({
+          kind: 'nagp' as const,
+          id,
+          name,
+        })),
+      ].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    [customerMappings, nagpMappings],
+  )
+
+  const scopeSelectOptions = useMemo(() => {
+    const toOptions = (kind: ScopeKind) =>
+      savedScopeEntries
+        .filter((entry) => entry.kind === kind)
+        .map((entry) => ({
+          value: encodeScopeSelection(entry.kind, entry.id),
+          label: entry.name,
+        }))
+
+    return [
+      { group: 'Customers', items: toOptions('customer') },
+      { group: 'NAGPs', items: toOptions('nagp') },
+    ].filter((section) => section.items.length > 0)
+  }, [savedScopeEntries])
+
   const onlySiteFilterIsUsed =
     results.siteFilterWasClientSide &&
-    !normalizeValue(searchForm.customer) &&
+    !normalizeValue(searchForm.scope) &&
     normalizeValue(searchForm.query).length > 0
 
   const handleFieldChange = (field: keyof SearchForm, value: string) => {
@@ -3010,11 +3112,11 @@ function App() {
     event.preventDefault()
 
     const query = normalizeValue(searchForm.query)
-    const customer = normalizeValue(searchForm.customer)
+    const scope = normalizeValue(searchForm.scope)
     const watchlist = normalizeValue(searchForm.watchlist)
-    
-    if (!query && !customer && !watchlist) {
-      setSearchError('Enter a search term or select a NAGP or watchlist.')
+
+    if (!query && !scope && !watchlist) {
+      setSearchError('Enter a search term or select a customer, NAGP, or watchlist.')
       return
     }
 
@@ -3243,12 +3345,16 @@ function App() {
     setSavedPairs((current) => current.filter((entry) => entry.key !== key))
   }
 
-  const handleDeleteNagp = (nagpId: string) => {
-    setNagpMappings((current) => {
+  const handleDeleteScope = (kind: ScopeKind, id: string) => {
+    const setMappings = kind === 'nagp' ? setNagpMappings : setCustomerMappings
+    setMappings((current) => {
       const next = { ...current }
-      delete next[nagpId]
+      delete next[id]
       return next
     })
+    setSearchForm((current) =>
+      current.scope === encodeScopeSelection(kind, id) ? { ...current, scope: '' } : current,
+    )
   }
 
   const handleTagsChange = (key: string, tags: string[]) => {
@@ -3820,20 +3926,15 @@ function App() {
                         <Stack gap="md">
                           <SimpleGrid cols={{ base: 1, md: 3 }}>
                             <Select
-                              label="NAGP"
-                              placeholder="Select NAGP"
-                              data={Object.entries(nagpMappings)
-                                .map(([nagpId, nagpName]) => ({
-                                  value: nagpId,
-                                  label: nagpName,
-                                }))
-                                .sort((a, b) => a.label.localeCompare(b.label))}
-                              value={searchForm.customer}
-                              onChange={(value) => handleFieldChange('customer', value || '')}
+                              label="Customer"
+                              placeholder="Select customer or NAGP"
+                              data={scopeSelectOptions}
+                              value={searchForm.scope}
+                              onChange={(value) => handleFieldChange('scope', value || '')}
                               clearable
                               searchable
                               withAlignedLabels
-                              nothingFoundMessage="No NAGPs stored"
+                              nothingFoundMessage="No customers or NAGPs stored"
                             />
                             <Select
                               label="Watchlist"
@@ -3874,7 +3975,8 @@ function App() {
                             <Text size="sm" c="dimmed">
                               Searches by cluster name, serial number, system ID, and host name in
                               parallel.
-                              NAGP and watchlist filters can be combined. Customer watchlists
+                              A saved customer filters by customer ID, a saved NAGP by NAGP ID, and
+                              either can be combined with a watchlist. Customer watchlists
                               are expanded via their customer IDs.
                             </Text>
                             <Group>
@@ -3948,6 +4050,13 @@ function App() {
                             <div key={groupIndex}>
                               <CustomerHeader
                                 group={group}
+                                onSaveCustomer={group.customerId ? () => {
+                                  const name = group.customerName || group.customerId!
+                                  setCustomerMappings((current) => ({ ...current, [group.customerId!]: name }))
+                                } : undefined}
+                                customerAlreadySaved={
+                                  group.customerId ? !!customerMappings[group.customerId] : false
+                                }
                                 onSaveNagp={group.nagpId ? () => {
                                   const name = group.nagpName || group.customerName || group.nagpId!
                                   setNagpMappings((current) => ({ ...current, [group.nagpId!]: name }))
@@ -4872,43 +4981,49 @@ function App() {
                 <Tabs.Panel value="customers" pt="md">
                   <Stack gap="lg">
                     <div>
-                      <Title order={3}>NAGP Customers</Title>
+                      <Title order={3}>Customers</Title>
                       <Text size="sm" c="dimmed">
-                        Locally stored NAGP ID and Name mappings.
+                        Locally stored customer and NAGP ID mappings, usable as search filters.
                       </Text>
                     </div>
 
-                    {Object.keys(nagpMappings).length === 0 ? (
+                    {savedScopeEntries.length === 0 ? (
                       <Paper withBorder radius="lg" p="xl">
                         <Text c="dimmed">
-                          No NAGP mappings stored yet. Click the plus icon next to a NAGP ID in the
-                          search results to save it.
+                          No customers or NAGPs stored yet. Click the plus icon next to a customer
+                          name or NAGP ID in the search results to save it.
                         </Text>
                       </Paper>
                     ) : (
                       <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }}>
-                        {Object.entries(nagpMappings)
-                          .sort((a, b) => a[1].localeCompare(b[1]))
-                          .map(([nagpId, nagpName]) => (
-                            <Card key={nagpId} withBorder radius="md" shadow="sm">
-                              <Group justify="space-between" align="flex-start">
-                                <Stack gap={4}>
-                                  <Text fw={600}>{nagpName}</Text>
-                                  <Text size="sm" c="dimmed">
-                                    NAGP ID: {nagpId}
-                                  </Text>
-                                </Stack>
-                                <ActionIcon
-                                  variant="subtle"
-                                  color="red"
-                                  aria-label="Delete NAGP mapping"
-                                  onClick={() => handleDeleteNagp(nagpId)}
-                                >
-                                  <IconTrash size={16} />
-                                </ActionIcon>
-                              </Group>
-                            </Card>
-                          ))}
+                        {savedScopeEntries.map((entry) => (
+                          <Card key={`${entry.kind}:${entry.id}`} withBorder radius="md" shadow="sm">
+                            <Group justify="space-between" align="flex-start">
+                              <Stack gap={4}>
+                                <Group gap="xs">
+                                  <Text fw={600}>{entry.name}</Text>
+                                  <Badge
+                                    size="xs"
+                                    color={entry.kind === 'customer' ? 'blue' : 'grape'}
+                                  >
+                                    {entry.kind === 'customer' ? 'Customer' : 'NAGP'}
+                                  </Badge>
+                                </Group>
+                                <Text size="sm" c="dimmed">
+                                  {entry.kind === 'customer' ? 'Customer ID' : 'NAGP ID'}: {entry.id}
+                                </Text>
+                              </Stack>
+                              <ActionIcon
+                                variant="subtle"
+                                color="red"
+                                aria-label={`Delete ${entry.kind} mapping`}
+                                onClick={() => handleDeleteScope(entry.kind, entry.id)}
+                              >
+                                <IconTrash size={16} />
+                              </ActionIcon>
+                            </Group>
+                          </Card>
+                        ))}
                       </SimpleGrid>
                     )}
                   </Stack>
