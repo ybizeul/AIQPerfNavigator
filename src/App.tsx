@@ -2580,7 +2580,7 @@ function VolumesTableSkeleton({
 
 function VolumesPanelSkeleton({ showNodeColumn = false }: { showNodeColumn?: boolean }) {
   return (
-    <Paper withBorder radius="lg" p="md">
+    <Paper withBorder radius="md" p="md">
       <Stack gap="sm">
         <Skeleton h={16} w={120} radius="sm" />
         <VolumesTableSkeleton showNodeColumn={showNodeColumn} />
@@ -2630,7 +2630,7 @@ function SearchEmptyState({
   description: string
 }) {
   return (
-    <Paper withBorder radius="lg" p="xl">
+    <Paper withBorder radius="md" p="xl">
       <Stack gap="sm" align="center">
         <ThemeIcon variant="light" color="gray" size="lg">
           <IconSearch size={18} />
@@ -2859,7 +2859,7 @@ function MetricsPairLibrary({
     visiblePairs.length > 0 && visiblePairs.every((pair) => selectedPairKeySet.has(pair.key))
 
   return (
-    <Paper withBorder radius="lg" className="metrics-library">
+    <Paper withBorder radius="md" className="metrics-library">
       <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
         <Group justify="space-between" align="flex-start">
           <div>
@@ -4388,7 +4388,7 @@ function App() {
                     {' '}and paste it here. It stays in this browser.
                   </Text>
                 </Stack>
-                <Paper withBorder radius="lg" p="lg" style={{ width: '100%' }}>
+                <Paper withBorder radius="md" p="lg" style={{ width: '100%' }}>
                   <Stack gap="md">
                     <PasswordInput
                       label="Refresh token"
@@ -4434,7 +4434,7 @@ function App() {
                       </Alert>
                     ) : null}
 
-                    <Paper withBorder radius="lg" p="lg">
+                    <Paper withBorder radius="md" p="lg">
                       <form onSubmit={handleSearch}>
                         <Stack gap="sm" align="center">
                           <div style={{ width: '100%', maxWidth: 620 }}>
@@ -4764,7 +4764,7 @@ function App() {
                     </Group>
 
                     {savedPairs.length === 0 ? (
-                      <Paper withBorder radius="lg" p="xl">
+                      <Paper withBorder radius="md" p="xl">
                         <Text c="dimmed">
                           Save an HA pair from the search tab to start building tagged collections.
                         </Text>
@@ -4772,7 +4772,7 @@ function App() {
                     ) : (
                       <Stack gap="md">
                         {filteredSavedPairs.length === 0 ? (
-                          <Paper withBorder radius="lg" p="xl">
+                          <Paper withBorder radius="md" p="xl">
                             <Text c="dimmed">
                               No saved HA pairs match your filter.
                             </Text>
@@ -4836,7 +4836,7 @@ function App() {
                     </Group>
 
                     {savedPairs.length === 0 ? (
-                      <Paper withBorder radius="lg" p="xl">
+                      <Paper withBorder radius="md" p="xl">
                         <Text c="dimmed">
                           Save HA pairs from the search tab to view their performance and capacity.
                         </Text>
@@ -4911,7 +4911,7 @@ function App() {
                             ) : null}
 
                             {selectedPairKeys.length === 0 ? (
-                              <Paper withBorder radius="lg" p="xl">
+                              <Paper withBorder radius="md" p="xl">
                                 <Text c="dimmed" ta="center">
                                   Select one or more HA pairs to view performance graphs
                                 </Text>
@@ -5046,7 +5046,7 @@ function App() {
                                     const chartData = rawChartData ? transformDataKeys(rawChartData) : null
 
                                     return (
-                                      <Paper key={graph.name} withBorder radius="lg" p="md">
+                                      <Paper key={graph.name} withBorder radius="md" p="md">
                                         <Stack gap="md">
                                           <Group justify="space-between" align="flex-start">
                                             <div>
@@ -5274,7 +5274,7 @@ function App() {
                           ) : (
                           <>
                           {selectedPairKeySet.size === 0 ? (
-                            <Paper withBorder radius="lg" p="xl">
+                            <Paper withBorder radius="md" p="xl">
                               <Text c="dimmed" ta="center">
                                 Select one or more HA pairs to view capacity details
                               </Text>
@@ -5300,7 +5300,7 @@ function App() {
                             ]
                             return (
                               <Stack gap="md">
-                                <Paper withBorder radius="lg" p="md">
+                                <Paper withBorder radius="md" p="md">
                                   <CapacityHistoryChart
                                     nodes={pair.node2 ? [pair.node1, pair.node2] : [pair.node1]}
                                     isLoading={refreshingCapacity.has(pair.key)}
@@ -5323,7 +5323,7 @@ function App() {
                                   }
                                 />
                                 {volumeRows.length > 0 ? (
-                                  <Paper withBorder radius="lg" p="md">
+                                  <Paper withBorder radius="md" p="md">
                                     <VolumesTable volumes={volumeRows} />
                                   </Paper>
                                 ) : areWorkloadsLoading ? (
@@ -5379,7 +5379,7 @@ function App() {
                             })
                             return (
                               <Stack gap="md">
-                              <Paper withBorder radius="lg" p="md">
+                              <Paper withBorder radius="md" p="md">
                                 <Stack gap="md">
                                   <div>
                                     <Text fw={500}>Aggregated Capacity</Text>
@@ -5429,7 +5429,7 @@ function App() {
                                 </Stack>
                               </Paper>
                               {volumeRows.length > 0 ? (
-                                <Paper withBorder radius="lg" p="md">
+                                <Paper withBorder radius="md" p="md">
                                   <VolumesTable volumes={volumeRows} />
                                 </Paper>
                               ) : areWorkloadsLoading ? (
