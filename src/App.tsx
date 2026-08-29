@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Combobox,
   Container,
   Divider,
   Group,
@@ -23,6 +24,7 @@ import {
   Paper,
   PasswordInput,
   Pill,
+  PillsInput,
   Popover,
   Progress,
   ScrollArea,
@@ -39,12 +41,14 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  useCombobox,
   useComputedColorScheme,
   useMantineColorScheme,
 } from '@mantine/core'
 import { AreaChart } from '@mantine/charts'
 import { useDisclosure, useLocalStorage } from '@mantine/hooks'
 import {
+  IconArrowBack,
   IconBookmark,
   IconBuilding,
   IconChartLine,
@@ -633,6 +637,27 @@ const emptySearchForm: SearchForm = {
   scope: '',
   watchlist: '',
   query: '',
+}
+
+// A search is always exactly one of these: a free-text term, a saved
+// customer/NAGP, or a watchlist. The form never mixes them.
+type SearchKind = 'query' | 'customer' | 'watchlist'
+
+const WATCHLIST_OPTION_PREFIX = 'watchlist:'
+
+const SEARCH_EMPTY_HINTS: Record<SearchKind, string> = {
+  query:
+    'Check the cluster name, serial number, system ID, or hostname, or pick a saved customer instead.',
+  customer:
+    'This customer or NAGP has no systems in Active IQ. Try another one, or search by name.',
+  watchlist:
+    'This watchlist has no systems in Active IQ. Try another watchlist, or search by name.',
+}
+
+function getSearchKind(form: SearchForm): SearchKind {
+  if (normalizeValue(form.scope)) return 'customer'
+  if (normalizeValue(form.watchlist)) return 'watchlist'
+  return 'query'
 }
 
 function CopyableText({
@@ -1433,85 +1458,136 @@ async function fetchSystemsByFilters(
   return allResults
 }
 
-async function fetchSystemsForScope(
-  token: string,
-  scope: SearchScope,
-  query: string,
-): Promise<SystemSummary[]> {
-  if (!query) {
-    return fetchSystemsByFilters(token, scope)
-  }
+const PARALLEL_SEARCH_QUERY_TYPES: SearchQueryType[] = [
+  'cluster',
+  'serialNumber',
+  'systemId',
+  'hostName',
+]
 
-  const [clusterResults, serialResults, systemIdResults, hostResults] = await Promise.all([
-    fetchSystemsForQuery(token, scope, 'cluster', query),
-    fetchSystemsForQuery(token, scope, 'serialNumber', query),
-    fetchSystemsForQuery(token, scope, 'systemId', query),
-    fetchSystemsForQuery(token, scope, 'hostName', query),
-  ])
-
-  return [...clusterResults, ...serialResults, ...systemIdResults, ...hostResults]
+const EMPTY_SEARCH_RESULTS: SearchResultState = {
+  pairs: [],
+  totalCount: 0,
+  siteFilterWasClientSide: false,
 }
 
-async function searchSystems(token: string, form: SearchForm): Promise<SearchResultState> {
-  const query = normalizeValue(form.query)
-  const selection = parseScopeSelection(normalizeValue(form.scope))
-  const watchlist = normalizeValue(form.watchlist)
-
-  // At least one search parameter is required
-  if (!query && !selection && !watchlist) {
-    return {
-      pairs: [],
-      totalCount: 0,
-      siteFilterWasClientSide: false,
-    }
-  }
-
-  const scopes = await resolveSearchScopes(token, selection, watchlist)
-  if (scopes.length === 0) {
-    return {
-      pairs: [],
-      totalCount: 0,
-      siteFilterWasClientSide: false,
-    }
-  }
-
-  const scopedResults = await Promise.all(
-    scopes.map((scope) => fetchSystemsForScope(token, scope, query)),
+function isTokenExpiredError(message: string) {
+  return (
+    message.includes('401') ||
+    message.toLowerCase().includes('token is expired') ||
+    message.toLowerCase().includes('expired token')
   )
-  const allResults = scopedResults.flat()
+}
 
-  // Merge and deduplicate results
+function buildSearchResultState(
+  systems: Iterable<SystemSummary>,
+  query: string,
+): SearchResultState {
   const systemMap = new Map<string, SystemSummary>()
-
-  for (const system of allResults) {
-    const key = system.serialNumber
-    if (!systemMap.has(key)) {
-      systemMap.set(key, system)
+  for (const system of systems) {
+    if (!systemMap.has(system.serialNumber)) {
+      systemMap.set(system.serialNumber, system)
     }
   }
 
-  let systems = Array.from(systemMap.values())
-
-  // Apply client-side customer site filter
-  const filteredSystems = systems.filter((system) => matchesCustomerSite(system, query))
-  const siteFilterWasClientSide = filteredSystems.length > 0 && filteredSystems.length < systems.length
-
-  // Merge site-filtered results
-  for (const system of filteredSystems) {
-    const key = system.serialNumber
-    if (!systemMap.has(key)) {
-      systemMap.set(key, system)
-    }
-  }
-
-  systems = Array.from(systemMap.values())
-  const pairs = groupIntoHAPairs(systems)
+  const unique = Array.from(systemMap.values())
+  const siteMatches = unique.filter((system) => matchesCustomerSite(system, query))
+  const siteFilterWasClientSide =
+    siteMatches.length > 0 && siteMatches.length < unique.length
+  const pairs = groupIntoHAPairs(unique)
 
   return {
     pairs,
     totalCount: pairs.length,
     siteFilterWasClientSide,
   }
+}
+
+function searchFetchTasks(
+  token: string,
+  scopes: SearchScope[],
+  query: string,
+): Array<Promise<SystemSummary[]>> {
+  if (!query) {
+    return scopes.map((scope) => fetchSystemsByFilters(token, scope))
+  }
+
+  return scopes.flatMap((scope) =>
+    PARALLEL_SEARCH_QUERY_TYPES.map((queryType) =>
+      fetchSystemsForQuery(token, scope, queryType, query),
+    ),
+  )
+}
+
+async function searchSystems(
+  token: string,
+  form: SearchForm,
+  onUpdate?: (state: SearchResultState) => void,
+): Promise<SearchResultState> {
+  const query = normalizeValue(form.query)
+  const selection = parseScopeSelection(normalizeValue(form.scope))
+  const watchlist = normalizeValue(form.watchlist)
+
+  if (!query && !selection && !watchlist) {
+    return EMPTY_SEARCH_RESULTS
+  }
+
+  const scopes = await resolveSearchScopes(token, selection, watchlist)
+  if (scopes.length === 0) {
+    return EMPTY_SEARCH_RESULTS
+  }
+
+  const systemMap = new Map<string, SystemSummary>()
+
+  const publish = () => {
+    const state = buildSearchResultState(systemMap.values(), query)
+    onUpdate?.(state)
+    return state
+  }
+
+  const addSystems = (systems: SystemSummary[]) => {
+    let added = false
+    for (const system of systems) {
+      if (!systemMap.has(system.serialNumber)) {
+        systemMap.set(system.serialNumber, system)
+        added = true
+      }
+    }
+    if (added) {
+      publish()
+    }
+  }
+
+  const outcomes = await Promise.allSettled(
+    searchFetchTasks(token, scopes, query).map((task) => task.then(addSystems)),
+  )
+
+  let tokenExpired: Error | null = null
+  let rateLimited: Error | null = null
+  const errors: Error[] = []
+
+  for (const outcome of outcomes) {
+    if (outcome.status !== 'rejected') continue
+    const error =
+      outcome.reason instanceof Error
+        ? outcome.reason
+        : new Error('Search failed with unknown error.')
+    if (isTokenExpiredError(error.message)) {
+      tokenExpired = error
+    } else if (error.message.includes('429')) {
+      rateLimited = error
+    } else {
+      errors.push(error)
+    }
+  }
+
+  if (systemMap.size === 0) {
+    if (tokenExpired) throw tokenExpired
+    if (rateLimited) throw rateLimited
+    if (errors.length > 0) throw errors[0]
+  }
+
+  return publish()
 }
 
 async function fetchPerformanceData(
@@ -2419,6 +2495,61 @@ function VolumesPanelSkeleton({ showNodeColumn = false }: { showNodeColumn?: boo
   )
 }
 
+function SearchResultsSkeleton() {
+  return (
+    <Stack gap="md">
+      {Array.from({ length: 2 }, (_, groupIndex) => (
+        <Paper key={groupIndex} withBorder radius="md" p="md">
+          <Stack gap="xs">
+            <Skeleton h={16} w={180} radius="sm" />
+            {Array.from({ length: 2 }, (_, cardIndex) => (
+              <Paper key={cardIndex} withBorder radius="md" p="sm">
+                <Stack gap="sm">
+                  <Group grow>
+                    <Stack gap={6}>
+                      <Skeleton h={14} w="60%" radius="sm" />
+                      <Skeleton h={10} w="40%" radius="sm" />
+                      <Skeleton h={8} radius="xl" />
+                    </Stack>
+                    <Stack gap={6}>
+                      <Skeleton h={14} w="60%" radius="sm" />
+                      <Skeleton h={10} w="40%" radius="sm" />
+                      <Skeleton h={8} radius="xl" />
+                    </Stack>
+                  </Group>
+                  <Skeleton h={28} radius="sm" />
+                </Stack>
+              </Paper>
+            ))}
+          </Stack>
+        </Paper>
+      ))}
+    </Stack>
+  )
+}
+
+function SearchEmptyState({
+  title,
+  description,
+}: {
+  title: string
+  description: string
+}) {
+  return (
+    <Paper withBorder radius="lg" p="xl">
+      <Stack gap="sm" align="center">
+        <ThemeIcon variant="light" color="gray" size="lg">
+          <IconSearch size={18} />
+        </ThemeIcon>
+        <Text fw={500}>{title}</Text>
+        <Text size="sm" c="dimmed" ta="center" maw={420}>
+          {description}
+        </Text>
+      </Stack>
+    </Paper>
+  )
+}
+
 function NodeInfo({
   node,
   label,
@@ -2731,6 +2862,11 @@ function App() {
   })
   const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
+  const [lastSearchKind, setLastSearchKind] = useState<SearchKind>('query')
+  const searchCombobox = useCombobox({
+    onDropdownClose: () => searchCombobox.resetSelectedOption(),
+  })
+  const searchFieldRef = useRef<HTMLInputElement>(null)
   const [watchlists, setWatchlists] = useState<Watchlist[]>([])
   const [watchlistsError, setWatchlistsError] = useState<string | null>(null)
   const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(() => Boolean(refreshToken))
@@ -2742,6 +2878,7 @@ function App() {
     siteFilterWasClientSide: false,
   })
   const [isLoading, setIsLoading] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [savingClusterId, setSavingClusterId] = useState<string | null>(null)
   const [clusterSaveError, setClusterSaveError] = useState<string | null>(null)
@@ -3015,32 +3152,46 @@ function App() {
     [customerMappings, nagpMappings],
   )
 
-  const scopeSelectOptions = useMemo(() => {
-    const toOptions = (kind: ScopeKind) =>
-      savedScopeEntries
-        .filter((entry) => entry.kind === kind)
-        .map((entry) => ({
-          value: encodeScopeSelection(entry.kind, entry.id),
-          label: entry.name,
-        }))
+  // The scope list is a browsable menu of everything saved, so it stays
+  // independent of whatever is typed in the field.
+  const searchSuggestions = useMemo(
+    () => ({
+      customers: savedScopeEntries.filter((entry) => entry.kind === 'customer'),
+      nagps: savedScopeEntries.filter((entry) => entry.kind === 'nagp'),
+      watchlists,
+    }),
+    [savedScopeEntries, watchlists],
+  )
 
-    return [
-      { group: 'Customers', items: toOptions('customer') },
-      { group: 'NAGPs', items: toOptions('nagp') },
-    ].filter((section) => section.items.length > 0)
-  }, [savedScopeEntries])
+  const selectedScope = useMemo(() => {
+    if (searchForm.scope) {
+      const selection = parseScopeSelection(searchForm.scope)
+      const entry = selection
+        ? savedScopeEntries.find(
+            (candidate) => candidate.kind === selection.kind && candidate.id === selection.id,
+          )
+        : null
+      return {
+        kindLabel: selection?.kind === 'nagp' ? 'NAGP' : 'Customer',
+        label: entry?.name ?? selection?.id ?? searchForm.scope,
+      }
+    }
 
-  const onlySiteFilterIsUsed =
-    results.siteFilterWasClientSide &&
-    !normalizeValue(searchForm.scope) &&
-    normalizeValue(searchForm.query).length > 0
+    if (searchForm.watchlist) {
+      const watchlist = watchlists.find((entry) => entry.id === searchForm.watchlist)
+      return {
+        kindLabel: 'Watchlist',
+        label: watchlist?.name ?? searchForm.watchlist,
+      }
+    }
 
-  const handleFieldChange = (field: keyof SearchForm, value: string) => {
-    setSearchForm((current) => ({
-      ...current,
-      [field]: value,
-    }))
-  }
+    return null
+  }, [searchForm.scope, searchForm.watchlist, savedScopeEntries, watchlists])
+
+  const hasSearchInput = Boolean(selectedScope) || normalizeValue(searchForm.query).length > 0
+
+  const onlySiteFilterIsUsed = results.siteFilterWasClientSide && lastSearchKind === 'query'
+
 
   const handleTokenSave = () => {
     // Clean token - remove all whitespace including newlines
@@ -3108,15 +3259,15 @@ function App() {
     }
   }
 
-  const handleSearch = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
+  const runSearch = async (form: SearchForm) => {
+    const activeForm: SearchForm = {
+      scope: normalizeValue(form.scope),
+      watchlist: normalizeValue(form.watchlist),
+      query: normalizeValue(form.query),
+    }
 
-    const query = normalizeValue(searchForm.query)
-    const scope = normalizeValue(searchForm.scope)
-    const watchlist = normalizeValue(searchForm.watchlist)
-
-    if (!query && !scope && !watchlist) {
-      setSearchError('Enter a search term or select a customer, NAGP, or watchlist.')
+    if (!activeForm.scope && !activeForm.watchlist && !activeForm.query) {
+      setSearchError('Enter a search term, or pick a saved customer or watchlist.')
       return
     }
 
@@ -3126,10 +3277,18 @@ function App() {
     }
 
     const generation = ++searchGenerationRef.current
+    setLastSearchKind(getSearchKind(activeForm))
+    setHasSearched(true)
     setIsLoading(true)
     setSearchError(null)
     setClusterSaveError(null)
     setSearchPage(1)
+    setResults(EMPTY_SEARCH_RESULTS)
+
+    const publishResults = (nextResults: SearchResultState) => {
+      if (generation !== searchGenerationRef.current) return
+      setResults(nextResults)
+    }
 
     try {
       let accessToken: string
@@ -3146,26 +3305,23 @@ function App() {
       }
 
       try {
-        const nextResults = await searchSystems(accessToken, searchForm)
-        if (generation !== searchGenerationRef.current) return
-        setResults(nextResults)
+        const nextResults = await searchSystems(accessToken, activeForm, publishResults)
+        publishResults(nextResults)
       } catch (error) {
         if (generation !== searchGenerationRef.current) return
         console.error('Search error:', error)
         const errorMessage = error instanceof Error ? error.message : 'Search failed with unknown error.'
 
-        // On 401 or token expiration, try refreshing the access token and retry
-        const isTokenExpired = errorMessage.includes('401') ||
-          errorMessage.toLowerCase().includes('token is expired') ||
-          errorMessage.toLowerCase().includes('expired token')
-
-        if (isTokenExpired) {
+        if (isTokenExpiredError(errorMessage)) {
           try {
             const newAccessToken = await renewAccessToken(accessToken)
 
-            const nextResults = await searchSystems(newAccessToken, searchForm)
-            if (generation !== searchGenerationRef.current) return
-            setResults(nextResults)
+            const nextResults = await searchSystems(
+              newAccessToken,
+              activeForm,
+              publishResults,
+            )
+            publishResults(nextResults)
             return
           } catch (refreshError) {
             if (generation !== searchGenerationRef.current) return
@@ -3181,17 +3337,92 @@ function App() {
           setSearchError(errorMessage)
         }
 
-        setResults({
-          pairs: [],
-          totalCount: 0,
-          siteFilterWasClientSide: false,
-        })
+        setResults(EMPTY_SEARCH_RESULTS)
       }
     } finally {
       if (generation === searchGenerationRef.current) {
         setIsLoading(false)
       }
     }
+  }
+
+  const handleSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    searchCombobox.closeDropdown()
+    void runSearch(searchForm)
+  }
+
+  // Picking a scope only fills the field; the search still has to be submitted.
+  const handleSearchOptionSubmit = (value: string) => {
+    searchCombobox.closeDropdown()
+
+    setSearchForm((current) =>
+      value.startsWith(WATCHLIST_OPTION_PREFIX)
+        ? {
+            scope: '',
+            watchlist: value.slice(WATCHLIST_OPTION_PREFIX.length),
+            query: current.query,
+          }
+        : { scope: value, watchlist: '', query: current.query },
+    )
+    setSearchError(null)
+    searchFieldRef.current?.focus()
+  }
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      searchCombobox.openDropdown()
+      searchCombobox.selectNextOption()
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      searchCombobox.selectPreviousOption()
+      return
+    }
+
+    if (event.key === 'Escape') {
+      searchCombobox.closeDropdown()
+      return
+    }
+
+    // Enter picks the highlighted suggestion when the user has arrowed into the
+    // list; otherwise it falls through and submits the form as a text search.
+    if (event.key === 'Enter') {
+      if (searchCombobox.getSelectedOptionIndex() >= 0) {
+        event.preventDefault()
+        searchCombobox.clickSelectedOption()
+      } else {
+        searchCombobox.closeDropdown()
+      }
+      return
+    }
+
+    if (event.key === 'Backspace' && searchForm.query.length === 0 && selectedScope) {
+      event.preventDefault()
+      setSearchForm(emptySearchForm)
+    }
+  }
+
+  const handleSearchQueryChange = (value: string) => {
+    setSearchForm((current) => ({ ...current, query: value }))
+    setSearchError(null)
+    searchCombobox.openDropdown()
+  }
+
+  const handleClearSearch = () => {
+    searchGenerationRef.current += 1
+    searchCombobox.closeDropdown()
+    setIsLoading(false)
+    setHasSearched(false)
+    setSearchForm(emptySearchForm)
+    setSearchError(null)
+    setClusterSaveError(null)
+    setShowSavedOnly(false)
+    setSearchPage(1)
+    setResults(EMPTY_SEARCH_RESULTS)
   }
 
   const handleSavePair = async (pair: HAPair, tags?: string[]) => {
@@ -3923,82 +4154,149 @@ function App() {
 
                     <Paper withBorder radius="lg" p="lg">
                       <form onSubmit={handleSearch}>
-                        <Stack gap="md">
-                          <SimpleGrid cols={{ base: 1, md: 3 }}>
-                            <Select
-                              label="Customer"
-                              placeholder="Select customer or NAGP"
-                              data={scopeSelectOptions}
-                              value={searchForm.scope}
-                              onChange={(value) => handleFieldChange('scope', value || '')}
-                              clearable
-                              searchable
-                              withAlignedLabels
-                              nothingFoundMessage="No customers or NAGPs stored"
-                            />
-                            <Select
-                              label="Watchlist"
-                              placeholder={
-                                isWatchlistsLoading ? 'Loading watchlists...' : 'Select watchlist'
-                              }
-                              data={watchlists.map((watchlist) => ({
-                                value: watchlist.id,
-                                label: watchlist.isDefault
-                                  ? `${watchlist.name} (default)`
-                                  : watchlist.name,
-                              }))}
-                              value={searchForm.watchlist}
-                              onChange={(value) => handleFieldChange('watchlist', value || '')}
-                              clearable
-                              searchable
-                              withAlignedLabels
-                              disabled={isWatchlistsLoading || !!watchlistsError}
-                              error={watchlistsError}
-                              rightSection={
-                                isWatchlistsLoading ? <Loader size="xs" /> : undefined
-                              }
-                              rightSectionPointerEvents={isWatchlistsLoading ? 'none' : undefined}
-                              nothingFoundMessage="No watchlists found"
-                            />
-                            <TextInput
-                              label="Search"
-                              placeholder="Cluster, serial number, system ID, system name, or customer site"
-                              value={searchForm.query}
-                              onChange={(event) =>
-                                handleFieldChange('query', event.currentTarget.value)
-                              }
-                              withAsterisk
-                            />
-                          </SimpleGrid>
+                        <Stack gap="sm" align="center">
+                          <div style={{ width: '100%', maxWidth: 620 }}>
+                            <Combobox
+                              store={searchCombobox}
+                              withinPortal={false}
+                              onOptionSubmit={handleSearchOptionSubmit}
+                            >
+                              <Combobox.DropdownTarget>
+                                <PillsInput
+                                  label="Search"
+                                  description="Searches cluster name, serial number, system ID, and hostname. Pick a saved customer, NAGP, or watchlist to search that scope, with or without a term."
+                                  leftSection={<IconSearch size={16} />}
+                                  radius="md"
+                                  rightSection={
+                                    <Group gap={2} h="100%" w="100%" wrap="nowrap" justify="flex-end">
+                                      {hasSearchInput ? (
+                                        <ActionIcon
+                                          size="sm"
+                                          variant="subtle"
+                                          color="gray"
+                                          aria-label="Clear search and results"
+                                          onClick={handleClearSearch}
+                                        >
+                                          <IconX size={14} />
+                                        </ActionIcon>
+                                      ) : null}
+                                      <ActionIcon
+                                        type="submit"
+                                        variant="filled"
+                                        aria-label="Search systems"
+                                        loading={isLoading}
+                                        disabled={!hasSearchInput}
+                                        h="100%"
+                                        w={44}
+                                        radius={0}
+                                        style={{
+                                          borderTopRightRadius: 'var(--mantine-radius-md)',
+                                          borderBottomRightRadius: 'var(--mantine-radius-md)',
+                                        }}
+                                      >
+                                        <IconArrowBack size={18} />
+                                      </ActionIcon>
+                                    </Group>
+                                  }
+                                  rightSectionWidth={hasSearchInput ? 68 : 44}
+                                  rightSectionPointerEvents="all"
+                                  onClick={() => searchCombobox.openDropdown()}
+                                >
+                                  <Pill.Group>
+                                    {selectedScope ? (
+                                      <Pill
+                                        withRemoveButton
+                                        onRemove={() => setSearchForm(emptySearchForm)}
+                                      >
+                                        {selectedScope.kindLabel}: {selectedScope.label}
+                                      </Pill>
+                                    ) : null}
+                                    <PillsInput.Field
+                                      placeholder={
+                                        selectedScope
+                                          ? 'Narrow within this scope (optional)'
+                                          : 'Cluster, serial, system ID, hostname, or customer'
+                                      }
+                                      ref={searchFieldRef}
+                                      value={searchForm.query}
+                                      onChange={(event) =>
+                                        handleSearchQueryChange(event.currentTarget.value)
+                                      }
+                                      onBlur={() => searchCombobox.closeDropdown()}
+                                      onKeyDown={handleSearchKeyDown}
+                                    />
+                                  </Pill.Group>
+                                </PillsInput>
+                              </Combobox.DropdownTarget>
 
-                          <Group justify="space-between">
-                            <Text size="sm" c="dimmed">
-                              Searches by cluster name, serial number, system ID, and host name in
-                              parallel.
-                              A saved customer filters by customer ID, a saved NAGP by NAGP ID, and
-                              either can be combined with a watchlist. Customer watchlists
-                              are expanded via their customer IDs.
+                              <Combobox.Dropdown>
+                                <Combobox.Options mah={280} style={{ overflowY: 'auto' }}>
+                                  {searchSuggestions.customers.length > 0 ? (
+                                    <Combobox.Group label="Customers">
+                                      {searchSuggestions.customers.map((entry) => (
+                                        <Combobox.Option
+                                          key={`customer-${entry.id}`}
+                                          value={encodeScopeSelection('customer', entry.id)}
+                                        >
+                                          {entry.name}
+                                        </Combobox.Option>
+                                      ))}
+                                    </Combobox.Group>
+                                  ) : null}
+
+                                  {searchSuggestions.nagps.length > 0 ? (
+                                    <Combobox.Group label="NAGPs">
+                                      {searchSuggestions.nagps.map((entry) => (
+                                        <Combobox.Option
+                                          key={`nagp-${entry.id}`}
+                                          value={encodeScopeSelection('nagp', entry.id)}
+                                        >
+                                          {entry.name}
+                                        </Combobox.Option>
+                                      ))}
+                                    </Combobox.Group>
+                                  ) : null}
+
+                                  {searchSuggestions.watchlists.length > 0 ? (
+                                    <Combobox.Group label="Watchlists">
+                                      {searchSuggestions.watchlists.map((watchlist) => (
+                                        <Combobox.Option
+                                          key={`watchlist-${watchlist.id}`}
+                                          value={`${WATCHLIST_OPTION_PREFIX}${watchlist.id}`}
+                                        >
+                                          {watchlist.isDefault
+                                            ? `${watchlist.name} (default)`
+                                            : watchlist.name}
+                                        </Combobox.Option>
+                                      ))}
+                                    </Combobox.Group>
+                                  ) : null}
+
+                                  {isWatchlistsLoading ? (
+                                    <Combobox.Empty>
+                                      <Group gap="xs" justify="center" wrap="nowrap">
+                                        <Loader size="xs" />
+                                        <span>Loading watchlists...</span>
+                                      </Group>
+                                    </Combobox.Empty>
+                                  ) : searchSuggestions.customers.length === 0 &&
+                                    searchSuggestions.nagps.length === 0 &&
+                                    searchSuggestions.watchlists.length === 0 ? (
+                                    <Combobox.Empty>
+                                      Type to search systems. Saved customers and watchlists appear
+                                      here once you have some.
+                                    </Combobox.Empty>
+                                  ) : null}
+                                </Combobox.Options>
+                              </Combobox.Dropdown>
+                            </Combobox>
+                          </div>
+
+                          {watchlistsError ? (
+                            <Text size="xs" c="red" ta="center">
+                              Watchlists could not be loaded: {watchlistsError}
                             </Text>
-                            <Group>
-                              <Button
-                                variant="default"
-                                onClick={() => {
-                                  setSearchForm(emptySearchForm)
-                                  setSearchError(null)
-                                  setResults({
-                                    pairs: [],
-                                    totalCount: 0,
-                                    siteFilterWasClientSide: false,
-                                  })
-                                }}
-                              >
-                                Clear
-                              </Button>
-                              <Button type="submit" loading={isLoading} leftSection={<IconSearch size={16} />}>
-                                Search systems
-                              </Button>
-                            </Group>
-                          </Group>
+                          ) : null}
                         </Stack>
                       </form>
                     </Paper>
@@ -4017,13 +4315,22 @@ function App() {
                       </Alert>
                     ) : null}
 
+                    {hasSearched && (isLoading || results.pairs.length > 0 || !searchError) ? (
+                      <>
                     <Group justify="space-between">
                       <div>
                         <Title order={3}>Search results</Title>
-                        <Text size="sm" c="dimmed">
-                          Showing {filteredSearchResults.length} HA pairs
-                          {showSavedOnly ? ' (saved only)' : ` (${results.totalCount} total)`}.
-                        </Text>
+                        {isLoading && results.pairs.length === 0 ? (
+                          <Text size="sm" c="dimmed">
+                            Looking up HA pairs…
+                          </Text>
+                        ) : results.pairs.length > 0 ? (
+                          <Text size="sm" c="dimmed">
+                            Showing {filteredSearchResults.length} HA pairs
+                            {showSavedOnly ? ' (saved only)' : ` (${results.totalCount} total)`}
+                            {isLoading ? ' — still searching…' : '.'}
+                          </Text>
+                        ) : null}
                       </div>
                       {results.pairs.length > 0 ? (
                         <Switch
@@ -4037,12 +4344,18 @@ function App() {
                       ) : null}
                     </Group>
 
-                    {results.pairs.length === 0 ? (
-                      <Paper withBorder radius="lg" p="xl">
-                        <Text c="dimmed">
-                          No systems to show yet. Run a search to populate this view.
-                        </Text>
-                      </Paper>
+                    {isLoading && results.pairs.length === 0 ? (
+                      <SearchResultsSkeleton />
+                    ) : results.pairs.length === 0 ? (
+                      <SearchEmptyState
+                        title="No HA pairs matched"
+                        description={SEARCH_EMPTY_HINTS[lastSearchKind]}
+                      />
+                    ) : filteredSearchResults.length === 0 ? (
+                      <SearchEmptyState
+                        title="No saved HA pairs in these results"
+                        description="Turn off 'Show saved only' to see every match from this search."
+                      />
                     ) : (
                       <>
                         <Stack gap="md">
@@ -4114,6 +4427,8 @@ function App() {
                         ) : null}
                       </>
                     )}
+                      </>
+                    ) : null}
                   </Stack>
                 </Tabs.Panel>
 
