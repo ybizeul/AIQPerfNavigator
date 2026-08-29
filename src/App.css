@@ -1,6 +1,13 @@
 /* Metrics workspace: HA pair library beside the analysis surface.
    Single column until the viewport can hold both without squeezing charts. */
 
+/* Mantine's default tooltip inverts to a light surface in dark mode. Pin one
+   surface per scheme so tooltips read as raised chrome rather than page background. */
+.mantine-Tooltip-tooltip {
+  --tooltip-bg: light-dark(var(--mantine-color-gray-9), var(--mantine-color-dark-4));
+  --tooltip-color: var(--mantine-color-white);
+}
+
 .metrics-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

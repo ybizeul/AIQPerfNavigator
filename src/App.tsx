@@ -14,6 +14,7 @@ import {
   Combobox,
   Container,
   Divider,
+  Drawer,
   Group,
   Indicator,
   Loader,
@@ -28,6 +29,7 @@ import {
   Popover,
   Progress,
   ScrollArea,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Skeleton,
@@ -56,7 +58,6 @@ import {
   IconCheck,
   IconCloud,
   IconCopy,
-  IconDatabase,
   IconDeviceDesktop,
   IconDownload,
   IconFilter,
@@ -116,17 +117,57 @@ function isBrowserDataExport(value: unknown): value is BrowserDataExport {
   )
 }
 
-const TAB_VALUES = ['search', 'saved', 'performance', 'capacity', 'customers'] as const
+const TAB_VALUES = ['search', 'saved', 'metrics'] as const
 type TabValue = (typeof TAB_VALUES)[number]
+type MetricsView = 'graphs' | 'capacity'
 const DEFAULT_TAB: TabValue = 'search'
+const DEFAULT_METRICS_VIEW: MetricsView = 'graphs'
+
+type LocationState = {
+  tab: TabValue
+  metricsView: MetricsView
+  openSavedFilters: boolean
+}
 
 function isTabValue(value: string | null): value is TabValue {
   return TAB_VALUES.includes(value as TabValue)
 }
 
-function getTabFromLocation(): TabValue {
+function parseLocation(): LocationState {
   const pathTab = window.location.pathname.split('/').filter(Boolean)[0] ?? null
-  return isTabValue(pathTab) ? pathTab : DEFAULT_TAB
+  const viewParam = new URLSearchParams(window.location.search).get('view')
+
+  if (pathTab === 'performance') {
+    return { tab: 'metrics', metricsView: 'graphs', openSavedFilters: false }
+  }
+  if (pathTab === 'capacity') {
+    return { tab: 'metrics', metricsView: 'capacity', openSavedFilters: false }
+  }
+  if (pathTab === 'customers') {
+    return { tab: 'search', metricsView: DEFAULT_METRICS_VIEW, openSavedFilters: true }
+  }
+  if (pathTab === 'metrics') {
+    return {
+      tab: 'metrics',
+      metricsView: viewParam === 'capacity' ? 'capacity' : DEFAULT_METRICS_VIEW,
+      openSavedFilters: false,
+    }
+  }
+  if (isTabValue(pathTab)) {
+    return { tab: pathTab, metricsView: DEFAULT_METRICS_VIEW, openSavedFilters: false }
+  }
+  return { tab: DEFAULT_TAB, metricsView: DEFAULT_METRICS_VIEW, openSavedFilters: false }
+}
+
+function buildTabUrl(tab: TabValue, metricsView: MetricsView) {
+  const url = new URL(window.location.href)
+  url.pathname = `/${tab}`
+  if (tab === 'metrics' && metricsView === 'capacity') {
+    url.searchParams.set('view', 'capacity')
+  } else {
+    url.searchParams.delete('view')
+  }
+  return url
 }
 
 const SYSTEMS_FIELDS = `
@@ -2175,20 +2216,20 @@ function CapacityGauge({
       </Group>
       <Tooltip.Group openDelay={300} closeDelay={100}>
         <Progress.Root size="xl">
-          <Tooltip label={`Used: ${formatKiB(used)}`} color="dark">
+          <Tooltip label={`Used: ${formatKiB(used)}`}>
             <Progress.Section value={usedPercentOfRaw} color={getUsedColor(usedPercent)}>
               <Progress.Label c={labelColor}>{formatKiB(used)}</Progress.Label>
             </Progress.Section>
           </Tooltip>
           {availablePercentOfRaw > 0 ? (
-            <Tooltip label={`Usable: ${formatKiB(usable)}`} color="dark">
+            <Tooltip label={`Usable: ${formatKiB(usable)}`}>
               <Progress.Section value={availablePercentOfRaw} color={usableColor}>
                 <Progress.Label c={labelColor}>{formatKiB(usable - used)}</Progress.Label>
               </Progress.Section>
             </Tooltip>
           ) : null}
           {unusablePercentOfRaw > 0 ? (
-            <Tooltip label={`Marketing: ${formatKiB(raw)}`} color="dark">
+            <Tooltip label={`Marketing: ${formatKiB(raw)}`}>
               <Progress.Section value={unusablePercentOfRaw} color={rawColor} />
             </Tooltip>
           ) : null}
@@ -2785,6 +2826,123 @@ function PairSelectionRow({
   )
 }
 
+function MetricsPairLibrary({
+  savedCount,
+  visiblePairs,
+  tagOptions,
+  metricsTagFilter,
+  selectedPairKeys,
+  selectedPairKeySet,
+  onFilterChange,
+  onTogglePair,
+  onApplyKeys,
+}: {
+  savedCount: number
+  visiblePairs: SavedHAPair[]
+  tagOptions: { value: string; label: string }[]
+  metricsTagFilter: string[]
+  selectedPairKeys: string[]
+  selectedPairKeySet: Set<string>
+  onFilterChange: (value: string[]) => void
+  onTogglePair: (key: string) => void
+  onApplyKeys: (keys: string[]) => void
+}) {
+  const allVisibleSelected =
+    visiblePairs.length > 0 && visiblePairs.every((pair) => selectedPairKeySet.has(pair.key))
+
+  return (
+    <Paper withBorder radius="lg" className="metrics-library">
+      <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
+        <Group justify="space-between" align="flex-start">
+          <div>
+            <Text fw={500} size="sm">HA pairs</Text>
+            <Text size="xs" c="dimmed">
+              {visiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedCount}` : ''} saved
+              {selectedPairKeySet.size > 0
+                ? ` · ${selectedPairKeySet.size} selected for Performance and Capacity`
+                : ''}
+            </Text>
+          </div>
+          {visiblePairs.length > 0 ? (
+            <Button
+              size="compact-xs"
+              variant="light"
+              onClick={() => {
+                onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
+              }}
+            >
+              {allVisibleSelected ? 'Clear' : 'Select all'}
+            </Button>
+          ) : null}
+        </Group>
+        <MultiSelect
+          mt="xs"
+          size="xs"
+          placeholder="Filter by tag"
+          data={tagOptions}
+          value={metricsTagFilter}
+          onChange={onFilterChange}
+          clearable
+          searchable
+          withAlignedLabels
+          nothingFoundMessage="No tags"
+          leftSection={<IconTag size={12} />}
+        />
+      </div>
+      <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
+        {groupPairsByCluster(visiblePairs).map((group, groupIndex) => {
+          const clusterPairKeys = group.pairs.map((pair) => pair.key)
+          const clusterSelected = group.pairs.every((pair) => selectedPairKeySet.has(pair.key))
+          return (
+            <div key={groupIndex}>
+              <div
+                style={{
+                  padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
+                  backgroundColor: 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-6))',
+                  borderBottom: '1px solid var(--mantine-color-default-border)',
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 2,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Text size="xs" fw={600}>
+                  {group.clusterName || 'Unknown'}
+                </Text>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="gray"
+                  style={{ border: '1px solid var(--mantine-color-gray-4)' }}
+                  onClick={() => {
+                    onApplyKeys(
+                      clusterSelected
+                        ? selectedPairKeys.filter((key) => !clusterPairKeys.includes(key))
+                        : [...new Set([...selectedPairKeys, ...clusterPairKeys])],
+                    )
+                  }}
+                >
+                  {clusterSelected ? 'Clear' : 'Select all'}
+                </Button>
+              </div>
+              {group.pairs.map((pair) => (
+                <PairSelectionRow
+                  key={pair.key}
+                  pair={pair}
+                  selected={selectedPairKeySet.has(pair.key)}
+                  onToggle={() => onTogglePair(pair.key)}
+                />
+              ))}
+            </div>
+          )
+        })}
+      </ScrollArea>
+    </Paper>
+  )
+}
+
 function HAPairCard({
   pair,
   action,
@@ -2931,7 +3089,11 @@ function App() {
     defaultValue: [],
     getInitialValueInEffect: false,
   })
-  const [activeTab, setActiveTab] = useState<TabValue>(() => getTabFromLocation())
+  const [bootLocation] = useState(parseLocation)
+  const [activeTab, setActiveTab] = useState<TabValue>(bootLocation.tab)
+  const [metricsView, setMetricsView] = useState<MetricsView>(bootLocation.metricsView)
+  const [savedFiltersOpened, { open: openSavedFilters, close: closeSavedFilters }] =
+    useDisclosure(bootLocation.openSavedFilters)
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
   const [lastSearchKind, setLastSearchKind] = useState<SearchKind>('query')
   const searchCombobox = useCombobox({
@@ -3071,19 +3233,40 @@ function App() {
   }
 
   useEffect(() => {
-    const handlePopState = () => setActiveTab(getTabFromLocation())
+    const canonical = buildTabUrl(bootLocation.tab, bootLocation.metricsView)
+    if (
+      canonical.pathname !== window.location.pathname ||
+      canonical.search !== window.location.search
+    ) {
+      window.history.replaceState(null, '', canonical)
+    }
+  }, [bootLocation.metricsView, bootLocation.tab])
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const next = parseLocation()
+      setActiveTab(next.tab)
+      setMetricsView(next.metricsView)
+      if (next.openSavedFilters) {
+        openSavedFilters()
+      }
+    }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
+  }, [openSavedFilters])
 
   function handleTabChange(value: string | null) {
     if (!isTabValue(value)) {
       return
     }
     setActiveTab(value)
-    const url = new URL(window.location.href)
-    url.pathname = `/${value}`
-    window.history.pushState(null, '', url)
+    window.history.pushState(null, '', buildTabUrl(value, metricsView))
+  }
+
+  function handleMetricsViewChange(value: string) {
+    const nextView: MetricsView = value === 'capacity' ? 'capacity' : 'graphs'
+    setMetricsView(nextView)
+    window.history.pushState(null, '', buildTabUrl('metrics', nextView))
   }
 
   useEffect(() => {
@@ -3310,7 +3493,7 @@ function App() {
       }
 
       const shouldImport = window.confirm(
-        'Importing this backup will replace browser data, including saved systems and tokens. Continue?',
+        'Importing this backup will replace browser data, including saved HA pairs and tokens. Continue?',
       )
       if (!shouldImport) {
         return
@@ -4075,6 +4258,57 @@ function App() {
         </Stack>
       </Modal>
 
+      <Drawer
+        opened={savedFiltersOpened}
+        onClose={closeSavedFilters}
+        title="Saved filters"
+        position="right"
+        size="md"
+      >
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">
+            Customers and NAGPs saved from search, used as scope chips in the search box.
+          </Text>
+          {savedScopeEntries.length === 0 ? (
+            <Text c="dimmed">
+              None yet. Use the plus next to a customer name or NAGP ID in search results to save
+              a filter.
+            </Text>
+          ) : (
+            <Stack gap="sm">
+              {savedScopeEntries.map((entry) => (
+                <Card key={`${entry.kind}:${entry.id}`} withBorder radius="md">
+                  <Group justify="space-between" align="flex-start">
+                    <Stack gap={4}>
+                      <Group gap="xs">
+                        <Text fw={600}>{entry.name}</Text>
+                        <Badge
+                          size="xs"
+                          color={entry.kind === 'customer' ? 'blue' : 'grape'}
+                        >
+                          {entry.kind === 'customer' ? 'Customer' : 'NAGP'}
+                        </Badge>
+                      </Group>
+                      <Text size="sm" c="dimmed">
+                        {entry.kind === 'customer' ? 'Customer ID' : 'NAGP ID'}: {entry.id}
+                      </Text>
+                    </Stack>
+                    <ActionIcon
+                      variant="subtle"
+                      color="red"
+                      aria-label={`Delete ${entry.kind} mapping`}
+                      onClick={() => handleDeleteScope(entry.kind, entry.id)}
+                    >
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Group>
+                </Card>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </Drawer>
+
       <AppShell header={{ height: 72 }} padding="lg">
         <AppShell.Header>
           <Container size="xl" h="100%">
@@ -4202,16 +4436,10 @@ function App() {
                     Search
                   </Tabs.Tab>
                   <Tabs.Tab value="saved" leftSection={<IconBookmark size={16} />}>
-                    Saved systems
+                    Saved HA pairs
                   </Tabs.Tab>
-                  <Tabs.Tab value="performance" leftSection={<IconChartLine size={16} />}>
-                    Performance
-                  </Tabs.Tab>
-                  <Tabs.Tab value="capacity" leftSection={<IconDatabase size={16} />}>
-                    Capacity
-                  </Tabs.Tab>
-                  <Tabs.Tab value="customers" leftSection={<IconBuilding size={16} />}>
-                    Customers
+                  <Tabs.Tab value="metrics" leftSection={<IconChartLine size={16} />}>
+                    Metrics
                   </Tabs.Tab>
                 </Tabs.List>
 
@@ -4227,6 +4455,22 @@ function App() {
                       <form onSubmit={handleSearch}>
                         <Stack gap="sm" align="center">
                           <div style={{ width: '100%', maxWidth: 620 }}>
+                            <Group justify="flex-end" mb={4}>
+                              <Button
+                                type="button"
+                                size="compact-xs"
+                                variant="subtle"
+                                leftSection={<IconBuilding size={14} />}
+                                onClick={openSavedFilters}
+                              >
+                                Saved filters
+                                {savedScopeEntries.length > 0 ? (
+                                  <Badge size="xs" variant="light" circle>
+                                    {savedScopeEntries.length}
+                                  </Badge>
+                                ) : null}
+                              </Button>
+                            </Group>
                             <Combobox
                               store={searchCombobox}
                               withinPortal={false}
@@ -4588,121 +4832,48 @@ function App() {
                   </Stack>
                 </Tabs.Panel>
 
-                <Tabs.Panel value="performance" pt="md">
+                <Tabs.Panel value="metrics" pt="md">
                   <Stack gap="lg">
-                    <div>
-                      <Title order={3}>Performance Graphs</Title>
-                      <Text size="sm" c="dimmed">
-                        View performance metrics for saved systems over time.
-                      </Text>
-                    </div>
-
-                    {!refreshToken ? (
-                      <Alert color="yellow" title="Authentication required">
-                        Configure your refresh token to view performance data. The token must have
-                        permissions for API Services to access the performance API endpoint.
-                      </Alert>
-                    ) : null}
+                    <Group justify="space-between" align="flex-end" wrap="wrap">
+                      <div>
+                        <Title order={3}>Metrics</Title>
+                        <Text size="sm" c="dimmed">
+                          Performance and capacity for saved HA pairs. The same selection is used
+                          in both views.
+                        </Text>
+                      </div>
+                      <SegmentedControl
+                        value={metricsView}
+                        onChange={handleMetricsViewChange}
+                        data={[
+                          { value: 'graphs', label: 'Performance' },
+                          { value: 'capacity', label: 'Capacity' },
+                        ]}
+                      />
+                    </Group>
 
                     {savedPairs.length === 0 ? (
                       <Paper withBorder radius="lg" p="xl">
                         <Text c="dimmed">
-                          Save HA pairs from the search tab to view their performance metrics.
+                          Save HA pairs from the search tab to view their performance and capacity.
                         </Text>
                       </Paper>
                     ) : (
                       <div className="metrics-layout">
-                        <Paper withBorder radius="lg" className="metrics-library">
-                          <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-                            <Group justify="space-between" align="flex-start">
-                              <div>
-                                <Text fw={500} size="sm">HA Pairs</Text>
-                                <Text size="xs" c="dimmed">
-                                  {metricsVisiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
-                                </Text>
-                              </div>
-                              {metricsVisiblePairs.length > 0 ? (
-                                <Button
-                                  size="compact-xs"
-                                  variant="light"
-                                  onClick={() => {
-                                    const allSelected = metricsVisiblePairs.every((p) =>
-                                      selectedPairKeySet.has(p.key),
-                                    )
-                                    applySelectedPairKeys(
-                                      allSelected ? [] : metricsVisiblePairs.map((p) => p.key),
-                                    )
-                                  }}
-                                >
-                                  {metricsVisiblePairs.every((p) => selectedPairKeySet.has(p.key)) ? 'Clear' : 'Select all'}
-                                </Button>
-                              ) : null}
-                            </Group>
-                            <MultiSelect
-                              mt="xs"
-                              size="xs"
-                              placeholder="Filter by tag"
-                              data={tagOptions}
-                              value={metricsTagFilter}
-                              onChange={handleMetricsTagFilterChange}
-                              clearable
-                              searchable
-                              withAlignedLabels
-                              nothingFoundMessage="No tags"
-                              leftSection={<IconTag size={12} />}
-                            />
-                          </div>
-                          <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
-                            {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
-                              <div key={groupIndex}>
-                                <div style={{ 
-                                  padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
-                                  backgroundColor: 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-6))',
-                                  borderBottom: '1px solid var(--mantine-color-default-border)',
-                                  position: 'sticky',
-                                  top: 0,
-                                  zIndex: 2,
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                }}>
-                                  <Text size="xs" fw={600}>
-                                    {group.clusterName || 'Unknown'}
-                                  </Text>
-                                  <Button
-                                    size="compact-xs"
-                                    variant="subtle"
-                                    color="gray"
-                                    style={{ border: '1px solid var(--mantine-color-gray-4)' }}
-                                    onClick={() => {
-                                      const clusterPairKeys = group.pairs.map((p) => p.key)
-                                      const allSelected = group.pairs.every((p) =>
-                                        selectedPairKeySet.has(p.key),
-                                      )
-                                      applySelectedPairKeys(
-                                        allSelected
-                                          ? selectedPairKeys.filter((k) => !clusterPairKeys.includes(k))
-                                          : [...new Set([...selectedPairKeys, ...clusterPairKeys])],
-                                      )
-                                    }}
-                                  >
-                                    {group.pairs.every((p) => selectedPairKeySet.has(p.key)) ? 'Clear' : 'Select All'}
-                                  </Button>
-                                </div>
-                                {group.pairs.map((pair) => (
-                                  <PairSelectionRow
-                                    key={pair.key}
-                                    pair={pair}
-                                    selected={selectedPairKeySet.has(pair.key)}
-                                    onToggle={() => handleTogglePairSelection(pair.key)}
-                                  />
-                                ))}
-                              </div>
-                            ))}
-                          </ScrollArea>
-                        </Paper>
+                        <MetricsPairLibrary
+                          savedCount={savedPairs.length}
+                          visiblePairs={metricsVisiblePairs}
+                          tagOptions={tagOptions}
+                          metricsTagFilter={metricsTagFilter}
+                          selectedPairKeys={selectedPairKeys}
+                          selectedPairKeySet={selectedPairKeySet}
+                          onFilterChange={handleMetricsTagFilterChange}
+                          onTogglePair={handleTogglePairSelection}
+                          onApplyKeys={applySelectedPairKeys}
+                        />
 
                         <div className="metrics-main">
+                          {metricsView === 'graphs' ? (
                           <Stack gap="md">
                             <Group gap="md" align="flex-end" wrap="wrap">
                               <Select
@@ -5117,84 +5288,12 @@ function App() {
                                 </Stack>
                             )}
                           </Stack>
-                        </div>
-                      </div>
-                    )}
-                  </Stack>
-                </Tabs.Panel>
-
-                <Tabs.Panel value="capacity" pt="md">
-                  <Stack gap="lg">
-                    <Group justify="space-between" align="flex-end">
-                      <div>
-                        <Title order={3}>Capacity</Title>
-                        <Text size="sm" c="dimmed">
-                          View capacity metrics for saved systems.
-                        </Text>
-                      </div>
-                    </Group>
-
-                    {savedPairs.length === 0 ? (
-                      <Paper withBorder radius="lg" p="xl">
-                        <Text c="dimmed">
-                          Save HA pairs from the search tab to view their capacity metrics.
-                        </Text>
-                      </Paper>
-                    ) : (
-                      <div className="metrics-layout">
-                        <Paper withBorder radius="lg" className="metrics-library">
-                          <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-                            <Text fw={500} size="sm">HA Pairs</Text>
-                            <Text size="xs" c="dimmed">
-                              {metricsVisiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedPairs.length}` : ''} saved
-                            </Text>
-                            <MultiSelect
-                              mt="xs"
-                              size="xs"
-                              placeholder="Filter by tag"
-                              data={tagOptions}
-                              value={metricsTagFilter}
-                              onChange={handleMetricsTagFilterChange}
-                              clearable
-                              searchable
-                              withAlignedLabels
-                              nothingFoundMessage="No tags"
-                              leftSection={<IconTag size={12} />}
-                            />
-                          </div>
-                          <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
-                            {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
-                              <div key={groupIndex}>
-                                <div style={{
-                                  padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)',
-                                  backgroundColor: 'light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-6))',
-                                  borderBottom: '1px solid var(--mantine-color-default-border)',
-                                  position: 'sticky',
-                                  top: 0,
-                                  zIndex: 2,
-                                }}>
-                                  <Text size="xs" fw={600}>
-                                    {group.clusterName || 'Unknown'}
-                                  </Text>
-                                </div>
-                                {group.pairs.map((pair) => (
-                                  <PairSelectionRow
-                                    key={pair.key}
-                                    pair={pair}
-                                    selected={selectedPairKeySet.has(pair.key)}
-                                    onToggle={() => handleTogglePairSelection(pair.key)}
-                                  />
-                                ))}
-                              </div>
-                            ))}
-                          </ScrollArea>
-                        </Paper>
-
-                        <div className="metrics-main">
+                          ) : (
+                          <>
                           {selectedPairKeySet.size === 0 ? (
                             <Paper withBorder radius="lg" p="xl">
                               <Text c="dimmed" ta="center">
-                                Select an HA pair to view capacity details
+                                Select one or more HA pairs to view capacity details
                               </Text>
                             </Paper>
                           ) : selectedPairKeySet.size === 1 ? (() => {
@@ -5356,59 +5455,10 @@ function App() {
                               </Stack>
                             )
                           })()}
+                          </>
+                          )}
                         </div>
                       </div>
-                    )}
-                  </Stack>
-                </Tabs.Panel>
-
-                <Tabs.Panel value="customers" pt="md">
-                  <Stack gap="lg">
-                    <div>
-                      <Title order={3}>Customers</Title>
-                      <Text size="sm" c="dimmed">
-                        Locally stored customer and NAGP ID mappings, usable as search filters.
-                      </Text>
-                    </div>
-
-                    {savedScopeEntries.length === 0 ? (
-                      <Paper withBorder radius="lg" p="xl">
-                        <Text c="dimmed">
-                          No customers or NAGPs stored yet. Click the plus icon next to a customer
-                          name or NAGP ID in the search results to save it.
-                        </Text>
-                      </Paper>
-                    ) : (
-                      <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }}>
-                        {savedScopeEntries.map((entry) => (
-                          <Card key={`${entry.kind}:${entry.id}`} withBorder radius="md" shadow="sm">
-                            <Group justify="space-between" align="flex-start">
-                              <Stack gap={4}>
-                                <Group gap="xs">
-                                  <Text fw={600}>{entry.name}</Text>
-                                  <Badge
-                                    size="xs"
-                                    color={entry.kind === 'customer' ? 'blue' : 'grape'}
-                                  >
-                                    {entry.kind === 'customer' ? 'Customer' : 'NAGP'}
-                                  </Badge>
-                                </Group>
-                                <Text size="sm" c="dimmed">
-                                  {entry.kind === 'customer' ? 'Customer ID' : 'NAGP ID'}: {entry.id}
-                                </Text>
-                              </Stack>
-                              <ActionIcon
-                                variant="subtle"
-                                color="red"
-                                aria-label={`Delete ${entry.kind} mapping`}
-                                onClick={() => handleDeleteScope(entry.kind, entry.id)}
-                              >
-                                <IconTrash size={16} />
-                              </ActionIcon>
-                            </Group>
-                          </Card>
-                        ))}
-                      </SimpleGrid>
                     )}
                   </Stack>
                 </Tabs.Panel>
