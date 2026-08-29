@@ -16,7 +16,6 @@ import {
   Divider,
   Drawer,
   Group,
-  Indicator,
   Loader,
   Menu,
   Modal,
@@ -1899,19 +1898,17 @@ function SaveScopeButton({
   onSave: () => void
 }) {
   return (
-    <Tooltip label={alreadySaved ? 'Already in customers list' : `Add ${label} to customers list`}>
-      <ActionIcon
-        size="xs"
-        variant={alreadySaved ? 'light' : 'filled'}
-        color={alreadySaved ? 'teal' : 'green'}
-        radius="xl"
-        aria-label={`Add ${label} to customers list`}
-        onClick={onSave}
-        disabled={alreadySaved}
-      >
-        {alreadySaved ? <IconCheck size={10} /> : <IconPlus size={10} stroke={3} />}
-      </ActionIcon>
-    </Tooltip>
+    <Button
+      size="compact-xs"
+      variant="light"
+      color={alreadySaved ? 'teal' : 'blue'}
+      leftSection={alreadySaved ? <IconCheck size={12} /> : <IconPlus size={12} />}
+      aria-label={alreadySaved ? `${label} already saved as a filter` : `Save ${label} as a filter`}
+      onClick={onSave}
+      disabled={alreadySaved}
+    >
+      {alreadySaved ? 'Saved as filter' : 'Save as filter'}
+    </Button>
   )
 }
 
@@ -2013,7 +2010,7 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
               disabled={clusterAddDisabled}
               onClick={onAddCluster}
             >
-              Add
+              Save cluster
             </Button>
           ) : null}
         </Group>
@@ -4333,48 +4330,45 @@ function App() {
                 </Tooltip>
                 <Menu position="bottom-end" shadow="md" width={210}>
                   <Menu.Target>
-                    <ActionIcon
+                    <Button
                       variant="default"
-                      size="lg"
-                      aria-label="Import or export browser data"
+                      size="sm"
+                      leftSection={<IconDownload size={16} />}
+                      aria-label="Backup: import or export browser data"
                     >
-                      <IconDownload size={18} />
-                    </ActionIcon>
+                      Backup
+                    </Button>
                   </Menu.Target>
                   <Menu.Dropdown>
                     <Menu.Item
                       leftSection={<IconUpload size={16} />}
                       onClick={() => browserDataInputRef.current?.click()}
                     >
-                      Import browser data
+                      Import
                     </Menu.Item>
                     <Menu.Item
                       leftSection={<IconDownload size={16} />}
                       onClick={handleBrowserDataExport}
                     >
-                      Export browser data
+                      Export
                     </Menu.Item>
                   </Menu.Dropdown>
                 </Menu>
-                <Indicator
-                  inline
-                  color={refreshToken ? 'teal' : 'gray'}
-                  disabled={false}
-                  label={refreshToken ? 'OK' : '!'}
-                  size={16}
+                <Button
+                  variant={refreshToken ? 'light' : 'default'}
+                  color={refreshToken ? 'teal' : undefined}
+                  size="sm"
+                  leftSection={<IconKey size={16} />}
+                  aria-label={
+                    refreshToken ? 'Signed in. Open token settings' : 'Add refresh token'
+                  }
+                  onClick={() => {
+                    setDraftRefreshToken(refreshToken)
+                    openTokenModal()
+                  }}
                 >
-                  <ActionIcon
-                    variant={refreshToken ? 'filled' : 'default'}
-                    size="lg"
-                    aria-label="Set refresh token"
-                    onClick={() => {
-                      setDraftRefreshToken(refreshToken)
-                      openTokenModal()
-                    }}
-                  >
-                    <IconKey size={18} />
-                  </ActionIcon>
-                </Indicator>
+                  {refreshToken ? 'Signed in' : 'Add token'}
+                </Button>
               </Group>
             </Group>
           </Container>
@@ -4703,7 +4697,7 @@ function App() {
                                         <HAPairCard
                                           pair={pair}
                                           action={() => void handleSavePair(pair, pairTags)}
-                                          actionLabel={isSaved ? 'Update saved entry' : 'Save HA pair'}
+                                          actionLabel={isSaved ? 'Update saved pair' : 'Save HA pair'}
                                           tagsEditor={
                                             <TagsEditor
                                               value={pairTags}
