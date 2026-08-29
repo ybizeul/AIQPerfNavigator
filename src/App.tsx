@@ -2625,9 +2625,15 @@ function SearchResultsSkeleton() {
 function SearchEmptyState({
   title,
   description,
+  actionLabel,
+  actionIcon,
+  onAction,
 }: {
   title: string
   description: string
+  actionLabel?: string
+  actionIcon?: ReactNode
+  onAction?: () => void
 }) {
   return (
     <Paper withBorder radius="md" p="xl">
@@ -2639,6 +2645,15 @@ function SearchEmptyState({
         <Text size="sm" c="dimmed" ta="center" maw={420}>
           {description}
         </Text>
+        {actionLabel && onAction ? (
+          <Button
+            size="sm"
+            leftSection={actionIcon ?? <IconSearch size={16} />}
+            onClick={onAction}
+          >
+            {actionLabel}
+          </Button>
+        ) : null}
       </Stack>
     </Paper>
   )
@@ -4764,19 +4779,22 @@ function App() {
                     </Group>
 
                     {savedPairs.length === 0 ? (
-                      <Paper withBorder radius="md" p="xl">
-                        <Text c="dimmed">
-                          Save an HA pair from the search tab to start building tagged collections.
-                        </Text>
-                      </Paper>
+                      <SearchEmptyState
+                        title="No saved HA pairs yet"
+                        description="Search for systems, then save the HA pairs you want to organize and analyze."
+                        actionLabel="Search for HA pairs"
+                        onAction={() => handleTabChange('search')}
+                      />
                     ) : (
                       <Stack gap="md">
                         {filteredSavedPairs.length === 0 ? (
-                          <Paper withBorder radius="md" p="xl">
-                            <Text c="dimmed">
-                              No saved HA pairs match your filter.
-                            </Text>
-                          </Paper>
+                          <SearchEmptyState
+                            title="No saved HA pairs match"
+                            description="Clear the filter to see every saved HA pair."
+                            actionLabel="Clear filter"
+                            actionIcon={<IconX size={16} />}
+                            onAction={() => setSavedSystemsFilter('')}
+                          />
                         ) : null}
                         {groupPairsByCustomer(filteredSavedPairs).map((group, groupIndex) => (
                           <div key={groupIndex}>
@@ -4836,11 +4854,12 @@ function App() {
                     </Group>
 
                     {savedPairs.length === 0 ? (
-                      <Paper withBorder radius="md" p="xl">
-                        <Text c="dimmed">
-                          Save HA pairs from the search tab to view their performance and capacity.
-                        </Text>
-                      </Paper>
+                      <SearchEmptyState
+                        title="No HA pairs available for Metrics"
+                        description="Search for systems and save at least one HA pair to view performance and capacity."
+                        actionLabel="Search for HA pairs"
+                        onAction={() => handleTabChange('search')}
+                      />
                     ) : (
                       <div className="metrics-layout">
                         <MetricsPairLibrary
