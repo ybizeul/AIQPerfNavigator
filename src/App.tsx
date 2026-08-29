@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { DateTimePicker } from '@mantine/dates'
 import '@mantine/dates/styles.css'
+import './App.css'
 import {
   ActionIcon,
   Alert,
@@ -19,7 +20,6 @@ import {
   Menu,
   Modal,
   MultiSelect,
-  NavLink,
   Pagination,
   Paper,
   PasswordInput,
@@ -41,6 +41,7 @@ import {
   ThemeIcon,
   Title,
   Tooltip,
+  UnstyledButton,
   useCombobox,
   useComputedColorScheme,
   useMantineColorScheme,
@@ -54,6 +55,7 @@ import {
   IconChartLine,
   IconCheck,
   IconCloud,
+  IconCopy,
   IconDatabase,
   IconDeviceDesktop,
   IconDownload,
@@ -674,25 +676,59 @@ function CopyableText({
   c?: string
 }) {
   const [copied, setCopied] = useState(false)
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current !== null) {
+        clearTimeout(copiedTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(textToCopy)
       .then(() => {
         setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
+        if (copiedTimeoutRef.current !== null) {
+          clearTimeout(copiedTimeoutRef.current)
+        }
+        copiedTimeoutRef.current = setTimeout(() => {
+          setCopied(false)
+          copiedTimeoutRef.current = null
+        }, 1500)
       })
       .catch((error) => {
         console.error('Failed to copy to clipboard:', error)
       })
   }
 
+  const iconSize = size === 'xs' ? 12 : 14
+
   return (
-    <Group gap={4} wrap="nowrap" w="fit-content" style={{ cursor: 'pointer' }} onClick={handleCopy}>
-      <Text fw={fw} size={size} c={copied ? 'teal' : c}>
-        {children}
-      </Text>
-      {copied && <IconCheck size={14} style={{ color: 'var(--mantine-color-teal-6)' }} />}
-    </Group>
+    <UnstyledButton
+      type="button"
+      onClick={handleCopy}
+      aria-label={copied ? `Copied ${textToCopy}` : `Copy ${textToCopy}`}
+      style={{ width: 'fit-content', maxWidth: '100%' }}
+    >
+      <Group gap={4} wrap="nowrap">
+        <Text fw={fw} size={size} c={copied ? 'teal' : c} span truncate>
+          {children}
+        </Text>
+        {copied ? (
+          <IconCheck
+            size={iconSize}
+            style={{ color: 'var(--mantine-color-teal-6)', flexShrink: 0 }}
+          />
+        ) : (
+          <IconCopy
+            size={iconSize}
+            style={{ color: 'var(--mantine-color-dimmed)', flexShrink: 0 }}
+          />
+        )}
+      </Group>
+    </UnstyledButton>
   )
 }
 
@@ -1899,8 +1935,14 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
   clusterAddDisabled?: boolean
 }) {
   return (
-    <Paper withBorder radius="md" p="md">
-      <Stack gap="xs">
+    <Stack component="section" gap="xs">
+      <Group
+        gap="xs"
+        justify="space-between"
+        wrap="wrap"
+        pb={4}
+        style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}
+      >
         <Group gap="xs" wrap="nowrap">
           {clusterGroup.clusterName ? (
             <CopyableText fw={600} size="sm" textToCopy={clusterGroup.clusterName}>
@@ -1923,13 +1965,16 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
             </Button>
           ) : null}
         </Group>
-        {clusterGroup.pairs.map((pair) => (
-          <div key={pair.key}>
-            {renderPair(pair)}
-          </div>
-        ))}
-      </Stack>
-    </Paper>
+        <Text size="xs" c="dimmed">
+          {clusterGroup.pairs.length} HA pair{clusterGroup.pairs.length !== 1 ? 's' : ''}
+        </Text>
+      </Group>
+      {clusterGroup.pairs.map((pair) => (
+        <div key={pair.key}>
+          {renderPair(pair)}
+        </div>
+      ))}
+    </Stack>
   )
 }
 
@@ -2637,34 +2682,56 @@ function getHardwareModelColor(modelName: string) {
   return 'gray'
 }
 
-function HardwareModelCornerBadge({
-  name,
-  roundedTopLeft = true,
-}: {
-  name: string
-  roundedTopLeft?: boolean
-}) {
+function getPairModels(pair: HAPair | SavedHAPair) {
+  const models = [
+    pair.node1.hardwareModel?.name
+      ? { nodeLabel: 'Node 1', name: pair.node1.hardwareModel.name }
+      : null,
+    pair.node2?.hardwareModel?.name
+      ? { nodeLabel: 'Node 2', name: pair.node2.hardwareModel.name }
+      : null,
+  ].filter((model): model is { nodeLabel: string; name: string } => model !== null)
+  const hasDifferentModels = new Set(models.map((model) => model.name)).size > 1
+
+  return {
+    hasDifferentModels,
+    displayedModels: hasDifferentModels ? models : models.slice(0, 1),
+  }
+}
+
+function HardwareModelCornerBadge({ pair }: { pair: HAPair | SavedHAPair }) {
+  const { hasDifferentModels, displayedModels } = getPairModels(pair)
+
+  if (displayedModels.length === 0) return null
+
   return (
-    <Badge
-      size="sm"
-      color={getHardwareModelColor(name)}
-      variant="filled"
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        borderRadius: `${roundedTopLeft ? '0.375rem' : '0'} 0 0.5rem 0`,
-        paddingLeft: '0.5rem',
-        paddingRight: '0.5rem',
-        zIndex: 1,
-      }}
+    <Group
+      gap={0}
+      wrap="nowrap"
+      style={{ position: 'absolute', top: 0, left: 0, zIndex: 1 }}
     >
-      {name}
-    </Badge>
+      {displayedModels.map((model, index) => (
+        <Badge
+          key={`${model.nodeLabel}-${model.name}`}
+          size="sm"
+          color={getHardwareModelColor(model.name)}
+          variant="filled"
+          style={{
+            borderRadius: `${index === 0 ? '0.375rem' : '0'} 0 ${
+              index === displayedModels.length - 1 ? '0.5rem' : '0'
+            } 0`,
+            paddingLeft: '0.5rem',
+            paddingRight: '0.5rem',
+          }}
+        >
+          {hasDifferentModels ? `${model.nodeLabel} ${model.name}` : model.name}
+        </Badge>
+      ))}
+    </Group>
   )
 }
 
-function PairSelectionNavLink({
+function PairSelectionRow({
   pair,
   selected,
   onToggle,
@@ -2673,42 +2740,48 @@ function PairSelectionNavLink({
   selected: boolean
   onToggle: () => void
 }) {
-  const modelName = pair.node1.hardwareModel?.name
+  const label = pairLabel(pair)
+  const { hasDifferentModels, displayedModels } = getPairModels(pair)
+  const modelLabel = displayedModels
+    .map((model) => (hasDifferentModels ? `${model.nodeLabel} ${model.name}` : model.name))
+    .join(' / ')
 
   return (
-    <div style={{ position: 'relative' }}>
-      {modelName ? <HardwareModelCornerBadge name={modelName} roundedTopLeft={false} /> : null}
-      <NavLink
-        label={pairLabel(pair)}
-        description={
-          <Stack gap={2}>
-            <span>{pairSerialLabel(pair)}</span>
-            {pair.tags.length > 0 ? (
-              <Group gap={2}>
-                {pair.tags.map((tag) => (
-                  <Badge
-                    key={tag}
-                    size="xs"
-                    variant="filled"
-                    color={getTagColor(tag)}
-                    style={{ fontSize: 9 }}
-                  >
-                    {getTagLabel(tag)}
-                  </Badge>
-                ))}
-              </Group>
-            ) : null}
-          </Stack>
-        }
-        active={selected}
-        onClick={onToggle}
-        styles={{
-          root: {
-            paddingTop: modelName ? 20 : undefined,
-          },
-        }}
-      />
-    </div>
+    <Checkbox
+      className="metrics-pair-row"
+      checked={selected}
+      onChange={onToggle}
+      label={
+        <Stack gap={4}>
+          <Text size="sm" fw={500} lh={1.3}>
+            {label}
+          </Text>
+          <Text size="xs" c="dimmed">
+            {pairSerialLabel(pair)}
+            {modelLabel ? ` · ${modelLabel}` : ''}
+          </Text>
+          {pair.tags.length > 0 ? (
+            <Group gap={4}>
+              {pair.tags.map((tag) => (
+                <Badge
+                  key={tag}
+                  size="xs"
+                  variant="filled"
+                  color={getTagColor(tag)}
+                >
+                  {getTagLabel(tag)}
+                </Badge>
+              ))}
+            </Group>
+          ) : null}
+        </Stack>
+      }
+      styles={{
+        body: { alignItems: 'flex-start' },
+        inner: { marginTop: 3 },
+        label: { paddingInlineStart: 8 },
+      }}
+    />
   )
 }
 
@@ -2738,12 +2811,10 @@ function HAPairCard({
   const { node1, node2 } = pair
 
   return (
-    <Card withBorder radius="md" shadow="sm" p="sm" style={{ position: 'relative' }}>
-      {node1.hardwareModel?.name ? (
-        <HardwareModelCornerBadge name={node1.hardwareModel.name} />
-      ) : null}
-      
-      <Stack gap="sm" pt={node1.hardwareModel?.name ? 'sm' : 0}>
+    <Card withBorder radius="md" p="sm" style={{ position: 'relative' }}>
+      <HardwareModelCornerBadge pair={pair} />
+
+      <Stack gap="sm" pt={getPairModels(pair).displayedModels.length > 0 ? 'sm' : 0}>
         {/* Two nodes side by side */}
         <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 50%', minWidth: 0 }}>
@@ -4540,8 +4611,8 @@ function App() {
                         </Text>
                       </Paper>
                     ) : (
-                      <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start', height: 'calc(100vh - 200px)' }}>
-                        <Paper withBorder radius="lg" style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                      <div className="metrics-layout">
+                        <Paper withBorder radius="lg" className="metrics-library">
                           <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
                             <Group justify="space-between" align="flex-start">
                               <div>
@@ -4581,7 +4652,7 @@ function App() {
                               leftSection={<IconTag size={12} />}
                             />
                           </div>
-                          <ScrollArea style={{ flex: 1 }} styles={{ scrollbar: { zIndex: 3 } }}>
+                          <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
                             {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{ 
@@ -4619,7 +4690,7 @@ function App() {
                                   </Button>
                                 </div>
                                 {group.pairs.map((pair) => (
-                                  <PairSelectionNavLink
+                                  <PairSelectionRow
                                     key={pair.key}
                                     pair={pair}
                                     selected={selectedPairKeySet.has(pair.key)}
@@ -4631,7 +4702,7 @@ function App() {
                           </ScrollArea>
                         </Paper>
 
-                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        <div className="metrics-main">
                           <Stack gap="md">
                             <Group gap="md" align="flex-end" wrap="wrap">
                               <Select
@@ -4696,7 +4767,6 @@ function App() {
                                 Configure your refresh token to view performance data.
                               </Alert>
                             ) : (
-                              <ScrollArea style={{ flex: 1 }}>
                                 <Stack gap="lg">
                                   {performanceError ? (
                                     <Alert color="red" title="Error loading performance data">
@@ -5045,7 +5115,6 @@ function App() {
                                     )
                                   })}
                                 </Stack>
-                              </ScrollArea>
                             )}
                           </Stack>
                         </div>
@@ -5072,8 +5141,8 @@ function App() {
                         </Text>
                       </Paper>
                     ) : (
-                      <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start', height: 'calc(100vh - 200px)' }}>
-                        <Paper withBorder radius="lg" style={{ width: 260, flexShrink: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                      <div className="metrics-layout">
+                        <Paper withBorder radius="lg" className="metrics-library">
                           <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
                             <Text fw={500} size="sm">HA Pairs</Text>
                             <Text size="xs" c="dimmed">
@@ -5093,7 +5162,7 @@ function App() {
                               leftSection={<IconTag size={12} />}
                             />
                           </div>
-                          <ScrollArea style={{ flex: 1 }} styles={{ scrollbar: { zIndex: 3 } }}>
+                          <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
                             {groupPairsByCluster(metricsVisiblePairs).map((group, groupIndex) => (
                               <div key={groupIndex}>
                                 <div style={{
@@ -5109,7 +5178,7 @@ function App() {
                                   </Text>
                                 </div>
                                 {group.pairs.map((pair) => (
-                                  <PairSelectionNavLink
+                                  <PairSelectionRow
                                     key={pair.key}
                                     pair={pair}
                                     selected={selectedPairKeySet.has(pair.key)}
@@ -5121,7 +5190,7 @@ function App() {
                           </ScrollArea>
                         </Paper>
 
-                        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
+                        <div className="metrics-main">
                           {selectedPairKeySet.size === 0 ? (
                             <Paper withBorder radius="lg" p="xl">
                               <Text c="dimmed" ta="center">
