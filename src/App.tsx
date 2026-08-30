@@ -76,7 +76,7 @@ import {
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
 const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken'
-const REFRESH_TOKEN_HINT = 'From Active IQ. Stored only in this browser.'
+const REFRESH_TOKEN_HINT = 'From the Active IQ website.'
 const PERFORMANCE_API_URL = 'https://api.activeiq.netapp.com/v1/performance-data/graphs'
 const WATCHLIST_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/list'
 const WATCHLIST_ACTION_API_URL = 'https://api.activeiq.netapp.com/v2/watchlist/action'
@@ -87,12 +87,13 @@ const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
 const ACCESS_TOKEN_STORAGE_KEY = 'aiq-system-organizer-token'
 const REFRESH_TOKEN_STORAGE_KEY = 'aiq-system-organizer-refresh-token'
 const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
+const SEEN_VERSION_STORAGE_KEY = 'aiq-system-organizer-seen-version'
 const SESSION_EXPIRED_MESSAGE =
-  'Session expired. Check that your refresh token is still valid.'
+  'Could not sign in to Active IQ. Check that your refresh token is still valid.'
 const RATE_LIMIT_MESSAGE =
-  'Active IQ is rate-limiting requests. Wait a few seconds and try again.'
+  'Active IQ is asking us to slow down. Wait a few seconds and try again.'
 const ACTIVE_IQ_UNAVAILABLE_MESSAGE = 'Active IQ is unavailable. Try again later.'
-const ACTIVE_IQ_REQUEST_FAILED_MESSAGE = 'Active IQ request failed.'
+const ACTIVE_IQ_REQUEST_FAILED_MESSAGE = 'Active IQ request failed. Try again.'
 const ACTIVE_IQ_UNREACHABLE_MESSAGE =
   'Could not reach Active IQ. Check your network connection.'
 const COLOR_SCHEME_LABELS = { auto: 'system', light: 'light', dark: 'dark' } as const
@@ -104,6 +105,73 @@ const DEVELOPMENT_BUILD_INFO: BuildInfo = {
 }
 const BUILD_INFO =
   typeof __AIQ_BUILD_INFO__ === 'undefined' ? DEVELOPMENT_BUILD_INFO : __AIQ_BUILD_INFO__
+
+type ParsedVersion = {
+  release: number[]
+  prerelease: string[]
+}
+
+function parseVersion(value: string): ParsedVersion | null {
+  const match = value
+    .trim()
+    .match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
+  if (!match) {
+    return null
+  }
+
+  return {
+    release: [Number(match[1]), Number(match[2]), Number(match[3])],
+    prerelease: match[4] ? match[4].split('.') : [],
+  }
+}
+
+function comparePrereleaseIdentifiers(a: string, b: string) {
+  const aNumeric = /^\d+$/.test(a)
+  const bNumeric = /^\d+$/.test(b)
+  if (aNumeric && bNumeric) return Number(a) - Number(b)
+  // Semver ranks numeric identifiers below alphanumeric ones.
+  if (aNumeric !== bNumeric) return aNumeric ? -1 : 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function compareVersions(a: ParsedVersion, b: ParsedVersion) {
+  for (let index = 0; index < a.release.length; index += 1) {
+    const difference = a.release[index] - b.release[index]
+    if (difference !== 0) return difference
+  }
+
+  // A version without a prerelease suffix outranks the same release with one.
+  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
+    return b.prerelease.length - a.prerelease.length
+  }
+
+  const sharedLength = Math.min(a.prerelease.length, b.prerelease.length)
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = comparePrereleaseIdentifiers(a.prerelease[index], b.prerelease[index])
+    if (difference !== 0) return difference
+  }
+
+  return a.prerelease.length - b.prerelease.length
+}
+
+function hasUnseenRelease() {
+  const current = parseVersion(BUILD_INFO.version)
+  if (!BUILD_INFO.isTagged || !current) {
+    return false
+  }
+
+  // A first visit has nothing to catch up on, so only upgrades open the changelog.
+  const seen = parseVersion(window.localStorage.getItem(SEEN_VERSION_STORAGE_KEY) ?? '')
+  return seen !== null && compareVersions(seen, current) < 0
+}
+
+function rememberCurrentVersion() {
+  if (!BUILD_INFO.isTagged) {
+    return
+  }
+
+  window.localStorage.setItem(SEEN_VERSION_STORAGE_KEY, BUILD_INFO.version)
+}
 
 type BrowserDataExport = {
   format: typeof BROWSER_DATA_FORMAT
@@ -127,12 +195,17 @@ function isExportableBrowserDataKey(key: string) {
 function isTokenExpiredError(message: string) {
   const normalized = message.toLowerCase()
   return (
+    normalized.includes('could not sign in') ||
     normalized.includes('session expired') ||
     normalized.includes('token is expired') ||
     normalized.includes('expired token') ||
     message.includes('401') ||
     message.includes('403')
   )
+}
+
+function isRateLimitedError(message: string) {
+  return message === RATE_LIMIT_MESSAGE || message.includes('429')
 }
 
 function messageForHttpStatus(status: number) {
@@ -1673,7 +1746,7 @@ async function searchSystems(
         : new Error('Search failed with unknown error.')
     if (isTokenExpiredError(error.message)) {
       tokenExpired = error
-    } else if (error.message.includes('429')) {
+    } else if (isRateLimitedError(error.message)) {
       rateLimited = error
     } else {
       errors.push(error)
@@ -3227,8 +3300,10 @@ function App() {
   })
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
+  const [openedForNewRelease] = useState(hasUnseenRelease)
+  const [showNewReleaseNotice, setShowNewReleaseNotice] = useState(openedForNewRelease)
   const [versionModalOpened, { open: openVersionModal, close: closeVersionModal }] =
-    useDisclosure(false)
+    useDisclosure(openedForNewRelease)
   const browserDataInputRef = useRef<HTMLInputElement>(null)
   const [browserDataError, setBrowserDataError] = useState<string | null>(null)
   const [refreshToken, setRefreshToken] = useLocalStorage({
@@ -3311,6 +3386,10 @@ function App() {
 
   useEffect(() => {
     window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+  }, [])
+
+  useEffect(() => {
+    rememberCurrentVersion()
   }, [])
 
   useEffect(() => {
@@ -3683,7 +3762,8 @@ function App() {
       }
 
       const shouldImport = window.confirm(
-        'Importing this backup will replace saved HA pairs and other browser data. Your refresh token will not change. Continue?',
+        'Importing this backup will replace saved HA pairs and other browser data. ' +
+          'Tokens in the file are ignored, so your refresh token will stay as it is. Continue?',
       )
       if (!shouldImport) {
         return
@@ -3700,7 +3780,9 @@ function App() {
       window.location.reload()
     } catch (error) {
       setBrowserDataError(
-        error instanceof Error ? error.message : 'The browser data import failed.',
+        error instanceof SyntaxError || !(error instanceof Error)
+          ? 'The backup could not be imported.'
+          : error.message,
       )
     }
   }
@@ -3743,9 +3825,7 @@ function App() {
       } catch (error) {
         if (generation !== searchGenerationRef.current) return
         setSearchError(
-          error instanceof Error
-            ? `Failed to get access token: ${error.message}`
-            : 'Failed to get access token.',
+          error instanceof Error ? error.message : ACTIVE_IQ_UNREACHABLE_MESSAGE,
         )
         return
       }
@@ -3773,12 +3853,12 @@ function App() {
             if (generation !== searchGenerationRef.current) return
             setSearchError(
               refreshError instanceof Error
-                ? `Token refresh failed: ${refreshError.message}`
-                : 'Token refresh failed.',
+                ? refreshError.message
+                : ACTIVE_IQ_UNREACHABLE_MESSAGE,
             )
           }
-        } else if (errorMessage.includes('429')) {
-          setSearchError('Rate exceeded, please wait 5 minutes.')
+        } else if (isRateLimitedError(errorMessage)) {
+          setSearchError(RATE_LIMIT_MESSAGE)
         } else {
           setSearchError(errorMessage)
         }
@@ -4165,9 +4245,7 @@ function App() {
       accessToken = await getAccessToken()
     } catch (error) {
       setPerformanceError(
-        error instanceof Error
-          ? `Failed to get access token: ${error.message}`
-          : 'Failed to get access token.',
+        error instanceof Error ? error.message : ACTIVE_IQ_UNREACHABLE_MESSAGE,
       )
       return
     }
@@ -4338,6 +4416,11 @@ function App() {
     openTokenModal()
   }
 
+  const handleVersionModalClose = () => {
+    setShowNewReleaseNotice(false)
+    closeVersionModal()
+  }
+
   return (
     <>
       <input
@@ -4349,15 +4432,17 @@ function App() {
       />
       <Modal
         opened={versionModalOpened}
-        onClose={closeVersionModal}
-        title="Changelog"
+        onClose={handleVersionModalClose}
+        title={showNewReleaseNotice ? "What's new" : 'Changelog'}
         centered
         size="lg"
       >
         <ScrollArea.Autosize mah="70vh" type="auto">
           <Stack gap="lg">
             <Text size="sm" c="dimmed">
-              Current version: {BUILD_INFO.version}
+              {showNewReleaseNotice
+                ? `AIQ Navigator updated to ${BUILD_INFO.version} since your last visit.`
+                : `Current version: ${BUILD_INFO.version}`}
             </Text>
             {BUILD_INFO.releases.length === 0 ? (
               <Text size="sm">No changelog yet. Entries appear from the second tagged release.</Text>
@@ -4407,7 +4492,7 @@ function App() {
       <Modal
         opened={browserDataError !== null}
         onClose={() => setBrowserDataError(null)}
-        title="Browser data import"
+        title="Backup import"
         centered
       >
         <Alert color="red" title="Import failed">
@@ -4446,8 +4531,8 @@ function App() {
       >
         <Stack>
           <Text size="sm" c="dimmed">
-            Paste a refresh token from Active IQ. It stays in this browser and is used only to
-            sign in here.
+            Paste a refresh token from Active IQ. It is stored only in this browser and is
+            used only to sign in here.
           </Text>
           <PasswordInput
             label="Refresh token"
@@ -4582,7 +4667,7 @@ function App() {
                     )}
                   </ActionIcon>
                 </Tooltip>
-                <Menu position="bottom-end" shadow="md" width={210}>
+                <Menu position="bottom-end" shadow="md" width={280}>
                   <Menu.Target>
                     {isWideHeader ? (
                       <Button
@@ -4604,6 +4689,7 @@ function App() {
                     )}
                   </Menu.Target>
                   <Menu.Dropdown>
+                    <Menu.Label>Saved HA pairs and filters. Tokens are not included.</Menu.Label>
                     <Menu.Item
                       leftSection={<IconUpload size={16} />}
                       onClick={() => browserDataInputRef.current?.click()}
