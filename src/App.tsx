@@ -4379,7 +4379,7 @@ function App() {
         size="lg"
       >
         <Stack gap="md">
-          <ScrollArea.Autosize mah="70vh" type="auto">
+          <ScrollArea.Autosize mah="min(70vh, calc(100dvh - 14rem))" type="auto">
             <Stack gap="lg">
               <Text size="sm" c="dimmed" id={versionModalDescriptionId}>
                 {!versionLabel
@@ -4441,6 +4441,18 @@ function App() {
               )}
             </Stack>
           </ScrollArea.Autosize>
+          <Divider />
+          <Text size="sm">
+            <Text span c="dimmed">
+              Feedback and questions:{' '}
+            </Text>
+            <Anchor
+              href="mailto:aiq@netapp-fr.io?subject=AIQ%20Navigator%20Feedback"
+              underline="always"
+            >
+              aiq@netapp-fr.io
+            </Anchor>
+          </Text>
           {showNewReleaseNotice ? (
             <Group justify="flex-end">
               <Button onClick={handleVersionModalClose}>Got it</Button>
