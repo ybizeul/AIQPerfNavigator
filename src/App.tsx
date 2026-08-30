@@ -73,6 +73,7 @@ import {
   IconUpload,
   IconX,
 } from '@tabler/icons-react'
+import { BUILD_INFO, rememberCurrentVersion, unseenReleaseVersions } from './version'
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
 const TOKEN_REFRESH_URL = 'https://api.activeiq.netapp.com/v1/tokens/accessToken'
@@ -87,7 +88,6 @@ const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
 const ACCESS_TOKEN_STORAGE_KEY = 'aiq-system-organizer-token'
 const REFRESH_TOKEN_STORAGE_KEY = 'aiq-system-organizer-refresh-token'
 const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
-const SEEN_VERSION_STORAGE_KEY = 'aiq-system-organizer-seen-version'
 const SESSION_EXPIRED_MESSAGE =
   'Could not sign in to Active IQ. Check that your refresh token is still valid.'
 const RATE_LIMIT_MESSAGE =
@@ -98,81 +98,6 @@ const ACTIVE_IQ_UNREACHABLE_MESSAGE =
   'Could not reach Active IQ. Check your network connection.'
 const COLOR_SCHEME_LABELS = { auto: 'system', light: 'light', dark: 'dark' } as const
 const NEXT_COLOR_SCHEME = { auto: 'light', light: 'dark', dark: 'auto' } as const
-const DEVELOPMENT_BUILD_INFO: BuildInfo = {
-  version: '0.0.0-dev',
-  isTagged: false,
-  releases: [],
-}
-const BUILD_INFO =
-  typeof __AIQ_BUILD_INFO__ === 'undefined' ? DEVELOPMENT_BUILD_INFO : __AIQ_BUILD_INFO__
-
-type ParsedVersion = {
-  release: number[]
-  prerelease: string[]
-}
-
-function parseVersion(value: string): ParsedVersion | null {
-  const match = value
-    .trim()
-    .match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/)
-  if (!match) {
-    return null
-  }
-
-  return {
-    release: [Number(match[1]), Number(match[2]), Number(match[3])],
-    prerelease: match[4] ? match[4].split('.') : [],
-  }
-}
-
-function comparePrereleaseIdentifiers(a: string, b: string) {
-  const aNumeric = /^\d+$/.test(a)
-  const bNumeric = /^\d+$/.test(b)
-  if (aNumeric && bNumeric) return Number(a) - Number(b)
-  // Semver ranks numeric identifiers below alphanumeric ones.
-  if (aNumeric !== bNumeric) return aNumeric ? -1 : 1
-  return a < b ? -1 : a > b ? 1 : 0
-}
-
-function compareVersions(a: ParsedVersion, b: ParsedVersion) {
-  for (let index = 0; index < a.release.length; index += 1) {
-    const difference = a.release[index] - b.release[index]
-    if (difference !== 0) return difference
-  }
-
-  // A version without a prerelease suffix outranks the same release with one.
-  if (a.prerelease.length === 0 || b.prerelease.length === 0) {
-    return b.prerelease.length - a.prerelease.length
-  }
-
-  const sharedLength = Math.min(a.prerelease.length, b.prerelease.length)
-  for (let index = 0; index < sharedLength; index += 1) {
-    const difference = comparePrereleaseIdentifiers(a.prerelease[index], b.prerelease[index])
-    if (difference !== 0) return difference
-  }
-
-  return a.prerelease.length - b.prerelease.length
-}
-
-function hasUnseenRelease() {
-  const current = parseVersion(BUILD_INFO.version)
-  if (!BUILD_INFO.isTagged || !current) {
-    return false
-  }
-
-  // A first visit has nothing to catch up on, so only upgrades open the changelog.
-  const seen = parseVersion(window.localStorage.getItem(SEEN_VERSION_STORAGE_KEY) ?? '')
-  return seen !== null && compareVersions(seen, current) < 0
-}
-
-function rememberCurrentVersion() {
-  if (!BUILD_INFO.isTagged) {
-    return
-  }
-
-  window.localStorage.setItem(SEEN_VERSION_STORAGE_KEY, BUILD_INFO.version)
-}
-
 type BrowserDataExport = {
   format: typeof BROWSER_DATA_FORMAT
   version: 1
@@ -3300,10 +3225,6 @@ function App() {
   })
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
-  const [openedForNewRelease] = useState(hasUnseenRelease)
-  const [showNewReleaseNotice, setShowNewReleaseNotice] = useState(openedForNewRelease)
-  const [versionModalOpened, { open: openVersionModal, close: closeVersionModal }] =
-    useDisclosure(openedForNewRelease)
   const browserDataInputRef = useRef<HTMLInputElement>(null)
   const [browserDataError, setBrowserDataError] = useState<string | null>(null)
   const [refreshToken, setRefreshToken] = useLocalStorage({
@@ -3340,6 +3261,17 @@ function App() {
   const [metricsView, setMetricsView] = useState<MetricsView>(bootLocation.metricsView)
   const [savedFiltersOpened, { open: openSavedFilters, close: closeSavedFilters }] =
     useDisclosure(bootLocation.openSavedFilters)
+  const [unseenVersions] = useState(unseenReleaseVersions)
+  // A deep link that opens the saved filters drawer is a stronger intent than the
+  // changelog, so hold the release notes back for the next plain visit instead.
+  const [greetsNewRelease] = useState(
+    () => unseenVersions.size > 0 && !bootLocation.openSavedFilters,
+  )
+  const [showNewReleaseNotice, setShowNewReleaseNotice] = useState(greetsNewRelease)
+  const [versionModalOpened, { open: openVersionModal, close: closeVersionModal }] =
+    useDisclosure(greetsNewRelease)
+  const versionModalDescriptionId = useId()
+  const versionLabel = BUILD_INFO.version
   const [searchForm, setSearchForm] = useState<SearchForm>(emptySearchForm)
   const [lastSearchKind, setLastSearchKind] = useState<SearchKind>('query')
   const searchCombobox = useCombobox({
@@ -3388,9 +3320,13 @@ function App() {
     window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
   }, [])
 
+  // First visits have nothing to greet, so record a baseline. An upgrade waits
+  // until the changelog is dismissed so a reload still shows the notes.
   useEffect(() => {
-    rememberCurrentVersion()
-  }, [])
+    if (unseenVersions.size === 0) {
+      rememberCurrentVersion()
+    }
+  }, [unseenVersions])
 
   useEffect(() => {
     if (!refreshToken) {
@@ -4417,6 +4353,9 @@ function App() {
   }
 
   const handleVersionModalClose = () => {
+    if (showNewReleaseNotice || unseenVersions.size > 0) {
+      rememberCurrentVersion()
+    }
     setShowNewReleaseNotice(false)
     closeVersionModal()
   }
@@ -4434,60 +4373,80 @@ function App() {
         opened={versionModalOpened}
         onClose={handleVersionModalClose}
         title={showNewReleaseNotice ? "What's new" : 'Changelog'}
+        aria-describedby={versionModalDescriptionId}
+        closeOnClickOutside={!showNewReleaseNotice}
         centered
         size="lg"
       >
-        <ScrollArea.Autosize mah="70vh" type="auto">
-          <Stack gap="lg">
-            <Text size="sm" c="dimmed">
-              {showNewReleaseNotice
-                ? `AIQ Navigator updated to ${BUILD_INFO.version} since your last visit.`
-                : `Current version: ${BUILD_INFO.version}`}
-            </Text>
-            {BUILD_INFO.releases.length === 0 ? (
-              <Text size="sm">No changelog yet. Entries appear from the second tagged release.</Text>
-            ) : (
-              BUILD_INFO.releases.map((release) => (
-                <Stack key={release.version} gap="xs">
-                  <Group gap="xs">
-                    <Title order={4}>{release.version}</Title>
-                    {BUILD_INFO.isTagged && release.version === BUILD_INFO.version ? (
-                      <Badge size="sm" variant="light">
-                        Current
-                      </Badge>
-                    ) : null}
-                  </Group>
-                  {release.changes.length === 0 ? (
-                    <Text size="sm" c="dimmed">
-                      No feature or fix entries.
-                    </Text>
-                  ) : (
-                    <Stack gap="xs">
-                      {release.changes.map((change, index) => (
-                        <Group
-                          key={`${release.version}-${change.type}-${index}`}
-                          gap="xs"
-                          align="flex-start"
-                          wrap="nowrap"
-                        >
-                          <Badge
-                            color={change.type === 'feat' ? 'blue' : 'teal'}
-                            variant="light"
-                            size="sm"
+        <Stack gap="md">
+          <ScrollArea.Autosize mah="70vh" type="auto">
+            <Stack gap="lg">
+              <Text size="sm" c="dimmed" id={versionModalDescriptionId}>
+                {!versionLabel
+                  ? 'This session has no version metadata. Start the app with the usual dev or production build to see the version and notes.'
+                  : showNewReleaseNotice
+                    ? `Updated to ${versionLabel} since your last visit. Reopen this anytime from the version in the header.`
+                    : `Current version: ${versionLabel}`}
+              </Text>
+              {BUILD_INFO.releases.length === 0 ? (
+                <Text size="sm">
+                  {versionLabel
+                    ? 'No feature or fix notes yet. They appear here after the next release.'
+                    : 'Release notes need that build metadata too.'}
+                </Text>
+              ) : (
+                BUILD_INFO.releases.map((release, releaseIndex) => (
+                  <Stack key={release.version} gap="xs">
+                    <Group gap="xs">
+                      <Title order={3}>{release.version}</Title>
+                      {unseenVersions.has(release.version) ? (
+                        <Badge size="sm" color="blue">
+                          New
+                        </Badge>
+                      ) : null}
+                      {BUILD_INFO.isTagged && release.version === BUILD_INFO.version ? (
+                        <Badge size="sm" variant="light">
+                          Current
+                        </Badge>
+                      ) : null}
+                    </Group>
+                    {release.changes.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        No feature or fix entries.
+                      </Text>
+                    ) : (
+                      <Stack gap="xs">
+                        {release.changes.map((change, index) => (
+                          <Group
+                            key={`${release.version}-${change.type}-${index}`}
+                            gap="xs"
+                            align="flex-start"
+                            wrap="nowrap"
                           >
-                            {change.type === 'feat' ? 'Feature' : 'Fix'}
-                          </Badge>
-                          <Text size="sm">{change.description}</Text>
-                        </Group>
-                      ))}
-                    </Stack>
-                  )}
-                  <Divider />
-                </Stack>
-              ))
-            )}
-          </Stack>
-        </ScrollArea.Autosize>
+                            <Badge
+                              color={change.type === 'feat' ? 'blue' : 'teal'}
+                              variant="light"
+                              size="sm"
+                            >
+                              {change.type === 'feat' ? 'Feature' : 'Fix'}
+                            </Badge>
+                            <Text size="sm">{change.description}</Text>
+                          </Group>
+                        ))}
+                      </Stack>
+                    )}
+                    {releaseIndex < BUILD_INFO.releases.length - 1 ? <Divider /> : null}
+                  </Stack>
+                ))
+              )}
+            </Stack>
+          </ScrollArea.Autosize>
+          {showNewReleaseNotice ? (
+            <Group justify="flex-end">
+              <Button onClick={handleVersionModalClose}>Got it</Button>
+            </Group>
+          ) : null}
+        </Stack>
       </Modal>
       <Modal
         opened={browserDataError !== null}
@@ -4640,10 +4599,10 @@ function App() {
                 <UnstyledButton
                   visibleFrom="sm"
                   onClick={openVersionModal}
-                  aria-label={`Version ${BUILD_INFO.version}. Open changelog`}
+                  aria-label={versionLabel ? `Version ${versionLabel}. Open changelog` : 'Open changelog'}
                 >
                   <Text size="xs" c="dimmed" td="underline">
-                    {BUILD_INFO.version}
+                    {versionLabel || 'Changelog'}
                   </Text>
                 </UnstyledButton>
               </Group>
@@ -5822,11 +5781,11 @@ function App() {
             h="100%"
             px="md"
             onClick={openVersionModal}
-            aria-label={`Version ${BUILD_INFO.version}. Open changelog`}
+            aria-label={versionLabel ? `Version ${versionLabel}. Open changelog` : 'Open changelog'}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           >
             <Text size="xs" c="dimmed" td="underline">
-              {BUILD_INFO.version}
+              {versionLabel || 'Changelog'}
             </Text>
           </UnstyledButton>
         </AppShell.Footer>

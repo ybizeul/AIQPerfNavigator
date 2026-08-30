@@ -25,6 +25,10 @@ run = "bun run lint"
 description = "Preview production build"
 run = "bun run preview"
 
+[tasks.test]
+description = "Run unit tests"
+run = "bun test"
+
 [tasks.typecheck]
 description = "Run TypeScript type checking"
 run = "bunx tsc -b"

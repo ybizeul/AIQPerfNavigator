@@ -1,86 +1,15 @@
-const SEMVER_TAG_PATTERN =
-  /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
-const CHANGE_PATTERN = /^(feat|fix)(?:\([^)]*\))?!?:\s*(.+)$/
-
-type BuildChangeType = 'feat' | 'fix'
-
-type BuildChange = {
-  type: BuildChangeType
-  description: string
-}
-
-type BuildInfo = {
-  version: string
-  isTagged: boolean
-  releases: Array<{
-    version: string
-    changes: BuildChange[]
-  }>
-}
-
-function runGit(args: string[]): string | null {
-  const result = Bun.spawnSync(['git', ...args], {
-    stdout: 'pipe',
-    stderr: 'ignore',
-  })
-
-  if (result.exitCode !== 0) {
-    return null
-  }
-
-  return result.stdout.toString().trim()
-}
-
-function getBuildInfo(): BuildInfo {
-  const tags = (runGit(['tag', '--merged', 'HEAD', '--sort=-version:refname']) ?? '')
-    .split('\n')
-    .filter((tag) => SEMVER_TAG_PATTERN.test(tag))
-  const headTags = new Set(
-    (runGit(['tag', '--points-at', 'HEAD']) ?? '')
-      .split('\n')
-      .filter((tag) => SEMVER_TAG_PATTERN.test(tag)),
-  )
-  const currentTag = tags.find((tag) => headTags.has(tag))
-
-  const releases = tags.flatMap((tag, index) => {
-    const olderTag = tags[index + 1]
-    if (!olderTag) {
-      return []
-    }
-
-    const subjects = (runGit(['log', '--format=%s', '--reverse', `${olderTag}..${tag}`]) ?? '')
-      .split('\n')
-    const changes = subjects.flatMap((subject): BuildChange[] => {
-      const match = subject.match(CHANGE_PATTERN)
-      if (!match) {
-        return []
-      }
-
-      return [
-        {
-          type: match[1] as BuildChangeType,
-          description: match[2],
-        },
-      ]
-    })
-
-    return [{ version: tag, changes }]
-  })
-
-  return {
-    version: currentTag ?? '0.0.0-dev',
-    isTagged: currentTag !== undefined,
-    releases,
-  }
-}
+import { BUILD_INFO_ENV_VAR, getBuildInfo } from './build-info'
 
 const buildInfo = getBuildInfo()
 const result = await Bun.build({
   entrypoints: ['./index.html'],
   outdir: './dist',
   minify: true,
+  // The dev server inlines this same expression from the environment (bunfig.toml),
+  // so the app reads one name in both modes. Define values must be JSON, hence the
+  // doubly encoded payload: the replacement has to be a string literal.
   define: {
-    __AIQ_BUILD_INFO__: JSON.stringify(buildInfo),
+    [`process.env.${BUILD_INFO_ENV_VAR}`]: JSON.stringify(JSON.stringify(buildInfo)),
   },
 })
 

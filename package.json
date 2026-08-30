@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "bun ./index.html",
+    "dev": "bun ./scripts/dev.ts",
     "build": "tsc -b && bun ./scripts/build.ts",
     "lint": "oxlint",
-    "preview": "bun ./scripts/preview.ts"
+    "preview": "bun ./scripts/preview.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "@mantine/charts": "^9.5.0",

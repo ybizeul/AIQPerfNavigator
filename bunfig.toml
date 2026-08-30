@@ -1,0 +1,4 @@
+# Inline AIQ_PUBLIC_* variables into the client bundle. The dev server needs this
+# to receive the build version, which scripts/dev.ts computes from git.
+[serve.static]
+env = "AIQ_PUBLIC_*"
