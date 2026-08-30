@@ -3015,13 +3015,26 @@ function MetricsPairLibrary({
   onTogglePair: (key: string) => void
   onApplyKeys: (keys: string[]) => void
 }) {
-  const allVisibleSelected =
-    visiblePairs.length > 0 && visiblePairs.every((pair) => selectedPairKeySet.has(pair.key))
+  const selectedVisibleCount = visiblePairs.filter((pair) => selectedPairKeySet.has(pair.key)).length
+  const allVisibleSelected = visiblePairs.length > 0 && selectedVisibleCount === visiblePairs.length
 
   return (
     <Paper withBorder radius="md" className="metrics-library">
       <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-        <Group justify="space-between" align="flex-start">
+        <Group align="flex-start" wrap="nowrap" gap="xs">
+          {visiblePairs.length > 0 ? (
+            <Tooltip label="Select all visible HA pairs" withArrow>
+              <Checkbox
+                checked={allVisibleSelected}
+                indeterminate={!allVisibleSelected && selectedVisibleCount > 0}
+                aria-label="All visible HA pairs"
+                onChange={() => {
+                  onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
+                }}
+                styles={{ body: { padding: 6, margin: -6 }, inner: { marginTop: 3 } }}
+              />
+            </Tooltip>
+          ) : null}
           <div>
             <Text fw={500} size="sm">HA pairs</Text>
             <Text size="xs" c="dimmed">
@@ -3031,17 +3044,6 @@ function MetricsPairLibrary({
                 : ''}
             </Text>
           </div>
-          {visiblePairs.length > 0 ? (
-            <Button
-              size="compact-xs"
-              variant="light"
-              onClick={() => {
-                onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
-              }}
-            >
-              {allVisibleSelected ? 'Clear' : 'Select all'}
-            </Button>
-          ) : null}
         </Group>
         <MultiSelect
           mt="xs"
@@ -3060,7 +3062,9 @@ function MetricsPairLibrary({
       <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
         {groupPairsByCluster(visiblePairs).map((group, groupIndex) => {
           const clusterPairKeys = group.pairs.map((pair) => pair.key)
-          const clusterSelected = group.pairs.every((pair) => selectedPairKeySet.has(pair.key))
+          const clusterSelectedCount = clusterPairKeys.filter((key) => selectedPairKeySet.has(key))
+            .length
+          const clusterSelected = clusterSelectedCount === clusterPairKeys.length
           return (
             <div key={groupIndex}>
               <div
@@ -3072,28 +3076,31 @@ function MetricsPairLibrary({
                   top: 0,
                   zIndex: 2,
                   display: 'flex',
-                  justifyContent: 'space-between',
                   alignItems: 'center',
+                  gap: 'var(--mantine-spacing-xs)',
                 }}
               >
+                <Tooltip
+                  label={`Select all HA pairs in ${group.clusterName || 'Unknown'}`}
+                  withArrow
+                >
+                  <Checkbox
+                    checked={clusterSelected}
+                    indeterminate={!clusterSelected && clusterSelectedCount > 0}
+                    aria-label={`All HA pairs in ${group.clusterName || 'Unknown'}`}
+                    onChange={() => {
+                      onApplyKeys(
+                        clusterSelected
+                          ? selectedPairKeys.filter((key) => !clusterPairKeys.includes(key))
+                          : [...new Set([...selectedPairKeys, ...clusterPairKeys])],
+                      )
+                    }}
+                    styles={{ body: { padding: 6, margin: -6 } }}
+                  />
+                </Tooltip>
                 <Text size="xs" fw={600}>
                   {group.clusterName || 'Unknown'}
                 </Text>
-                <Button
-                  size="compact-xs"
-                  variant="subtle"
-                  color="gray"
-                  style={{ border: '1px solid var(--mantine-color-gray-4)' }}
-                  onClick={() => {
-                    onApplyKeys(
-                      clusterSelected
-                        ? selectedPairKeys.filter((key) => !clusterPairKeys.includes(key))
-                        : [...new Set([...selectedPairKeys, ...clusterPairKeys])],
-                    )
-                  }}
-                >
-                  {clusterSelected ? 'Clear' : 'Select all'}
-                </Button>
               </div>
               {group.pairs.map((pair) => (
                 <PairSelectionRow
