@@ -8,6 +8,13 @@
   --tooltip-color: var(--mantine-color-white);
 }
 
+/* Mantine's footer offset ignores safe-area padding applied on the footer element. */
+@media (max-width: 47.99em) {
+  .mantine-AppShell-root {
+    --app-shell-footer-offset: calc(36px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 .metrics-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

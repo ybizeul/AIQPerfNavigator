@@ -47,7 +47,7 @@ import {
   useMantineColorScheme,
 } from '@mantine/core'
 import { AreaChart } from '@mantine/charts'
-import { useDisclosure, useLocalStorage } from '@mantine/hooks'
+import { useDisclosure, useLocalStorage, useMediaQuery } from '@mantine/hooks'
 import {
   IconArrowBack,
   IconBookmark,
@@ -61,6 +61,7 @@ import {
   IconFilter,
   IconFilterFilled,
   IconKey,
+  IconKeyOff,
   IconLock,
   IconMoon,
   IconPlus,
@@ -83,7 +84,17 @@ const PAGE_SIZE = 100
 const BROWSER_DATA_FILENAME = 'aiqperfnav.aiq'
 const BROWSER_DATA_FORMAT = 'aiq-perf-navigator-browser-data'
 const BROWSER_DATA_PREFIX = 'aiq-system-organizer-'
+const ACCESS_TOKEN_STORAGE_KEY = 'aiq-system-organizer-token'
+const REFRESH_TOKEN_STORAGE_KEY = 'aiq-system-organizer-refresh-token'
 const COLOR_SCHEME_STORAGE_KEY = 'mantine-color-scheme-value'
+const SESSION_EXPIRED_MESSAGE =
+  'Session expired. Check that your refresh token is still valid.'
+const RATE_LIMIT_MESSAGE =
+  'Active IQ is rate-limiting requests. Wait a few seconds and try again.'
+const ACTIVE_IQ_UNAVAILABLE_MESSAGE = 'Active IQ is unavailable. Try again later.'
+const ACTIVE_IQ_REQUEST_FAILED_MESSAGE = 'Active IQ request failed.'
+const ACTIVE_IQ_UNREACHABLE_MESSAGE =
+  'Could not reach Active IQ. Check your network connection.'
 const COLOR_SCHEME_LABELS = { auto: 'system', light: 'light', dark: 'dark' } as const
 const NEXT_COLOR_SCHEME = { auto: 'light', light: 'dark', dark: 'auto' } as const
 const DEVELOPMENT_BUILD_INFO: BuildInfo = {
@@ -101,8 +112,40 @@ type BrowserDataExport = {
   data: Record<string, string>
 }
 
+function isCredentialStorageKey(key: string) {
+  return key === ACCESS_TOKEN_STORAGE_KEY || key === REFRESH_TOKEN_STORAGE_KEY
+}
+
 function isBrowserDataKey(key: string) {
   return key.startsWith(BROWSER_DATA_PREFIX) || key === COLOR_SCHEME_STORAGE_KEY
+}
+
+function isExportableBrowserDataKey(key: string) {
+  return isBrowserDataKey(key) && !isCredentialStorageKey(key)
+}
+
+function isTokenExpiredError(message: string) {
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('session expired') ||
+    normalized.includes('token is expired') ||
+    normalized.includes('expired token') ||
+    message.includes('401') ||
+    message.includes('403')
+  )
+}
+
+function messageForHttpStatus(status: number) {
+  if (status === 401 || status === 403) return SESSION_EXPIRED_MESSAGE
+  if (status === 429) return RATE_LIMIT_MESSAGE
+  if (status >= 500) return ACTIVE_IQ_UNAVAILABLE_MESSAGE
+  return ACTIVE_IQ_REQUEST_FAILED_MESSAGE
+}
+
+function messageForGraphqlErrors(errors: GraphQlError[]) {
+  const joined = errors.map((error) => error.message).join('\n')
+  if (isTokenExpiredError(joined)) return SESSION_EXPIRED_MESSAGE
+  return ACTIVE_IQ_REQUEST_FAILED_MESSAGE
 }
 
 function isBrowserDataExport(value: unknown): value is BrowserDataExport {
@@ -1128,12 +1171,8 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
         refresh_token: cleanToken,
       }),
     })
-  } catch (fetchError) {
-    const errorMsg = fetchError instanceof Error ? fetchError.message : 'Unknown error'
-    throw new Error(
-      `Failed to connect to token refresh API: ${errorMsg}. ` +
-      `This may be due to CORS restrictions or network connectivity issues.`
-    )
+  } catch {
+    throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
   }
 
   // If we got a 401 and the token has 4 segments, try with a trailing dot
@@ -1149,23 +1188,13 @@ async function refreshAccessToken(refreshToken: string): Promise<string> {
           refresh_token: tokenWith5Segments,
         }),
       })
-    } catch (retryError) {
-      const errorMsg = retryError instanceof Error ? retryError.message : 'Unknown error'
-      throw new Error(`Token refresh retry failed: ${errorMsg}`)
+    } catch {
+      throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
     }
   }
 
   if (!response.ok) {
-    let errorMessage = `Token refresh failed with HTTP ${response.status}.`
-    try {
-      const errorBody = await response.text()
-      if (errorBody) {
-        errorMessage += ` Response: ${errorBody}`
-      }
-    } catch {
-      // Ignore parsing errors
-    }
-    throw new Error(errorMessage)
+    throw new Error(messageForHttpStatus(response.status))
   }
 
   const payload = (await response.json()) as TokenRefreshResponse
@@ -1206,13 +1235,12 @@ async function fetchWatchlistApi(url: string, token: string): Promise<unknown> {
         AuthorizationToken: token,
       },
     })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown network error'
-    throw new Error(`Failed to connect to the watchlist API: ${message}`)
+  } catch {
+    throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
   }
 
   if (!response.ok) {
-    throw new Error(`Watchlist API returned HTTP ${response.status}.`)
+    throw new Error(messageForHttpStatus(response.status))
   }
 
   return response.json()
@@ -1301,48 +1329,18 @@ async function fetchSystemsForQuery(
       },
       body: JSON.stringify(requestBody),
     })
-  } catch (fetchError) {
-    // Network-level error (CORS, DNS, connectivity, etc.)
-    const errorMsg = fetchError instanceof Error ? fetchError.message : 'Unknown network error'
-    throw new Error(
-      `Network request failed: ${errorMsg}. ` +
-      `This may be due to rate limiting, or connectivity issues. ` +
-      `Querying ${API_URL} for ${queryType}.`
-    )
+  } catch {
+    throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
   }
 
   if (!response.ok) {
-    let errorMessage = `AIQ GraphQL API returned HTTP ${response.status}`
-    
-    // Try to get more details from response body
-    try {
-      const errorBody = await response.json()
-      if (errorBody.error) {
-        errorMessage += `: ${errorBody.error}`
-      } else if (errorBody.errors) {
-        errorMessage += `: ${JSON.stringify(errorBody.errors)}`
-      }
-      
-      // Add helpful context for common errors
-      if (response.status === 429) {
-        errorMessage += `. The API is rate-limiting requests. Try waiting a few seconds before searching again, or reduce the number of parallel queries.`
-      } else if (response.status === 401 || response.status === 403) {
-        errorMessage += `. Check that your access token is valid and has the necessary permissions.`
-      }
-    } catch {
-      // Ignore JSON parsing errors
-      if (response.status === 429) {
-        errorMessage += ` (Too Many Requests). The API is rate-limiting requests.`
-      }
-    }
-    
-    throw new Error(errorMessage)
+    throw new Error(messageForHttpStatus(response.status))
   }
 
   const payload = (await response.json()) as GraphQlResponse<SystemsQueryData>
 
   if (payload.errors && payload.errors.length > 0) {
-    throw new Error(payload.errors.map((error) => error.message).join('\n'))
+    throw new Error(messageForGraphqlErrors(payload.errors))
   }
 
   const systems = payload.data?.systems?.systems ?? []
@@ -1405,7 +1403,7 @@ async function fetchClusterForSystem(
   }>
 
   if (payload.errors && payload.errors.length > 0) {
-    console.warn('Cluster query errors:', payload.errors)
+    console.warn('Cluster query failed')
     return null
   }
 
@@ -1491,7 +1489,7 @@ async function fetchWorkloads(
   const payload = (await response.json()) as GraphQlResponse<StorageVolumesPageData>
 
   if (payload.errors && payload.errors.length > 0) {
-    console.warn('Workloads query errors:', payload.errors)
+    console.warn('Workloads query failed')
     return null
   }
 
@@ -1541,34 +1539,18 @@ async function fetchSystemsByFilters(
       },
       body: JSON.stringify(requestBody),
     })
-  } catch (fetchError) {
-    const errorMsg = fetchError instanceof Error ? fetchError.message : 'Unknown error'
-    throw new Error(
-      `Network request failed for filtered search: ${errorMsg}. ` +
-      `This may be due to rate limiting, or connectivity issues.`
-    )
+  } catch {
+    throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
   }
 
   if (!response.ok) {
-    let errorMessage = `AIQ filtered search returned HTTP ${response.status}`
-    try {
-      const errorBody = await response.json()
-      if (errorBody.error) {
-        errorMessage += `: ${errorBody.error}`
-      }
-      if (response.status === 429) {
-        errorMessage += `. Rate limit exceeded - please wait before searching again.`
-      }
-    } catch {
-      // Ignore parsing errors
-    }
-    throw new Error(errorMessage)
+    throw new Error(messageForHttpStatus(response.status))
   }
 
   const payload = (await response.json()) as GraphQlResponse<SystemsQueryData>
 
   if (payload.errors && payload.errors.length > 0) {
-    throw new Error(payload.errors.map((error) => error.message).join('\n'))
+    throw new Error(messageForGraphqlErrors(payload.errors))
   }
 
   const systems = payload.data?.systems?.systems ?? []
@@ -1594,14 +1576,6 @@ const EMPTY_SEARCH_RESULTS: SearchResultState = {
   pairs: [],
   totalCount: 0,
   siteFilterWasClientSide: false,
-}
-
-function isTokenExpiredError(message: string) {
-  return (
-    message.includes('401') ||
-    message.toLowerCase().includes('token is expired') ||
-    message.toLowerCase().includes('expired token')
-  )
 }
 
 function buildSearchResultState(
@@ -1760,17 +1734,7 @@ async function fetchPerformanceData(
   })
 
   if (!response.ok) {
-    let errorMessage = `Performance API returned HTTP ${response.status}`
-    try {
-      const errorBody = await response.text()
-      if (errorBody) {
-        errorMessage += `: ${errorBody}`
-      }
-    } catch {
-      // Ignore parsing errors
-    }
-    console.error('Performance API error:', errorMessage)
-    throw new Error(errorMessage)
+    throw new Error(messageForHttpStatus(response.status))
   }
 
   const data = (await response.json()) as PerformanceResponse
@@ -3257,19 +3221,18 @@ function HAPairCard({
 
 function App() {
   const { colorScheme, setColorScheme } = useMantineColorScheme()
+  // Read on first render so the header does not flip layouts after mount.
+  const isWideHeader = useMediaQuery('(min-width: 48em)', true, {
+    getInitialValueInEffect: false,
+  })
   const [tokenModalOpened, { open: openTokenModal, close: closeTokenModal }] =
     useDisclosure(false)
   const [versionModalOpened, { open: openVersionModal, close: closeVersionModal }] =
     useDisclosure(false)
   const browserDataInputRef = useRef<HTMLInputElement>(null)
   const [browserDataError, setBrowserDataError] = useState<string | null>(null)
-  const [token, setToken] = useLocalStorage({
-    key: 'aiq-system-organizer-token',
-    defaultValue: '',
-    getInitialValueInEffect: false,
-  })
   const [refreshToken, setRefreshToken] = useLocalStorage({
-    key: 'aiq-system-organizer-refresh-token',
+    key: REFRESH_TOKEN_STORAGE_KEY,
     defaultValue: '',
     getInitialValueInEffect: false,
   })
@@ -3343,12 +3306,12 @@ function App() {
   const hasRestoredSelection = useRef(false)
   const searchGenerationRef = useRef(0)
 
-  const tokenRef = useRef(token)
+  const tokenRef = useRef('')
   const pendingTokenRequestRef = useRef<Promise<string> | null>(null)
 
   useEffect(() => {
-    tokenRef.current = token
-  }, [token])
+    window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+  }, [])
 
   useEffect(() => {
     if (!refreshToken) {
@@ -3366,7 +3329,6 @@ function App() {
         if (!accessToken) {
           accessToken = await refreshAccessToken(refreshToken)
           tokenRef.current = accessToken
-          setToken(accessToken)
         }
 
         let nextWatchlists: Watchlist[]
@@ -3374,11 +3336,10 @@ function App() {
           nextWatchlists = await fetchWatchlists(accessToken)
         } catch (error) {
           const message = error instanceof Error ? error.message : ''
-          if (!message.includes('HTTP 401')) throw error
+          if (!isTokenExpiredError(message)) throw error
 
           accessToken = await refreshAccessToken(refreshToken)
           tokenRef.current = accessToken
-          setToken(accessToken)
           nextWatchlists = await fetchWatchlists(accessToken)
         }
 
@@ -3406,7 +3367,7 @@ function App() {
     return () => {
       isCancelled = true
     }
-  }, [refreshToken, setToken])
+  }, [refreshToken])
 
   // Concurrent callers join the pending request instead of each asking the API for its own token.
   const requestAccessToken = () => {
@@ -3418,7 +3379,6 @@ function App() {
         try {
           const newToken = await refreshAccessToken(refreshToken)
           tokenRef.current = newToken
-          setToken(newToken)
           return newToken
         } finally {
           pendingTokenRequestRef.current = null
@@ -3681,7 +3641,6 @@ function App() {
     setRefreshToken(draftRefreshToken.replace(/\s/g, ''))
     // Clear any existing access token - it will be fetched when needed
     tokenRef.current = ''
-    setToken('')
     closeTokenModal()
   }
 
@@ -3689,7 +3648,9 @@ function App() {
     const data = Object.fromEntries(
       Array.from({ length: window.localStorage.length }, (_, index) => {
         const key = window.localStorage.key(index)
-        return key && isBrowserDataKey(key) ? [key, window.localStorage.getItem(key) ?? ''] : null
+        return key && isExportableBrowserDataKey(key)
+          ? [key, window.localStorage.getItem(key) ?? '']
+          : null
       }).filter((entry): entry is [string, string] => entry !== null),
     )
     const browserData: BrowserDataExport = {
@@ -3722,17 +3683,19 @@ function App() {
       }
 
       const shouldImport = window.confirm(
-        'Importing this backup will replace browser data, including saved HA pairs and tokens. Continue?',
+        'Importing this backup will replace saved HA pairs and other browser data. Your refresh token will not change. Continue?',
       )
       if (!shouldImport) {
         return
       }
 
       Object.keys(window.localStorage)
-        .filter(isBrowserDataKey)
+        .filter(isExportableBrowserDataKey)
         .forEach((key) => window.localStorage.removeItem(key))
       Object.entries(parsedData.data).forEach(([key, value]) => {
-        window.localStorage.setItem(key, value)
+        if (isExportableBrowserDataKey(key)) {
+          window.localStorage.setItem(key, value)
+        }
       })
       window.location.reload()
     } catch (error) {
@@ -3974,11 +3937,7 @@ function App() {
         systems = await fetchClusterSystems(accessToken)
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Cluster search failed.'
-        const isTokenExpired = errorMessage.includes('401') ||
-          errorMessage.toLowerCase().includes('token is expired') ||
-          errorMessage.toLowerCase().includes('expired token')
-
-        if (!isTokenExpired) {
+        if (!isTokenExpiredError(errorMessage)) {
           throw error
         }
 
@@ -4177,12 +4136,7 @@ function App() {
         await doFetch(accessToken)
       } catch (error) {
         const msg = error instanceof Error ? error.message : ''
-        const isExpired =
-          msg.includes('401') ||
-          msg.toLowerCase().includes('token is expired') ||
-          msg.toLowerCase().includes('expired token')
-
-        if (isExpired) {
+        if (isTokenExpiredError(msg)) {
           const newToken = await renewAccessToken(accessToken)
           await doFetch(newToken)
         } else {
@@ -4250,12 +4204,7 @@ function App() {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load performance data.'
 
-      const isTokenExpired =
-        errorMessage.includes('401') ||
-        errorMessage.toLowerCase().includes('token is expired') ||
-        errorMessage.toLowerCase().includes('expired token')
-
-      if (isTokenExpired) {
+      if (isTokenExpiredError(errorMessage)) {
         try {
           const newAccessToken = await renewAccessToken(accessToken)
 
@@ -4274,15 +4223,10 @@ function App() {
         } catch (refreshError) {
           const refreshErrorMsg =
             refreshError instanceof Error ? refreshError.message : 'Unknown error'
-          const isStillTokenError =
-            refreshErrorMsg.includes('401') ||
-            refreshErrorMsg.toLowerCase().includes('token is expired') ||
-            refreshErrorMsg.toLowerCase().includes('expired token')
-
           setPerformanceError(
-            isStillTokenError
+            isTokenExpiredError(refreshErrorMsg)
               ? 'Authentication failed. Check that your refresh token has access to performance data.'
-              : `After token refresh: ${refreshErrorMsg}`,
+              : refreshErrorMsg,
           )
         }
       } else {
@@ -4385,6 +4329,14 @@ function App() {
       }
     }
   }, [refreshToken, savedPairs, selectedPairKeys]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tokenActionLabel = refreshToken
+    ? 'Signed in. Open token settings'
+    : 'Add refresh token'
+  const handleTokenButtonClick = () => {
+    setDraftRefreshToken(refreshToken)
+    openTokenModal()
+  }
 
   return (
     <>
@@ -4512,7 +4464,6 @@ function App() {
                 color="red"
                 onClick={() => {
                   tokenRef.current = ''
-                  setToken('')
                   setRefreshToken('')
                   setDraftRefreshToken('')
                   setWatchlists([])
@@ -4579,13 +4530,30 @@ function App() {
         </Stack>
       </Drawer>
 
-      <AppShell header={{ height: 72 }} padding="lg">
+      <AppShell
+        header={{ height: { base: 56, sm: 72 } }}
+        footer={{ height: { base: 36, sm: 0 } }}
+        padding={{ base: 'sm', sm: 'md', md: 'lg' }}
+      >
         <AppShell.Header>
-          <Container size="xl" h="100%">
-            <Group justify="space-between" align="center" h="100%">
-              <Group gap="xs" align="baseline">
-                <Title order={2}>AIQ Navigator</Title>
+          <Container size="xl" h="100%" px={{ base: 'xs', sm: 'md' }}>
+            <Group justify="space-between" align="center" h="100%" gap="sm" wrap="nowrap">
+              <Group gap="xs" align="baseline" wrap="nowrap" style={{ minWidth: 0 }}>
+                <Title
+                  order={2}
+                  fz={{ base: 'h4', sm: 'h2' }}
+                  lh={1.2}
+                  style={{
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  AIQ Navigator
+                </Title>
                 <UnstyledButton
+                  visibleFrom="sm"
                   onClick={openVersionModal}
                   aria-label={`Version ${BUILD_INFO.version}. Open changelog`}
                 >
@@ -4595,11 +4563,11 @@ function App() {
                 </UnstyledButton>
               </Group>
 
-              <Group gap="sm">
+              <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
                 <Tooltip label={`Appearance: ${COLOR_SCHEME_LABELS[colorScheme]}`}>
                   <ActionIcon
                     variant="default"
-                    size="lg"
+                    size={isWideHeader ? 'lg' : 'xl'}
                     aria-label={`Appearance: ${COLOR_SCHEME_LABELS[colorScheme]}. Switch to ${
                       COLOR_SCHEME_LABELS[NEXT_COLOR_SCHEME[colorScheme]]
                     }.`}
@@ -4616,14 +4584,24 @@ function App() {
                 </Tooltip>
                 <Menu position="bottom-end" shadow="md" width={210}>
                   <Menu.Target>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      leftSection={<IconDownload size={16} />}
-                      aria-label="Backup: import or export browser data"
-                    >
-                      Backup
-                    </Button>
+                    {isWideHeader ? (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        leftSection={<IconDownload size={16} />}
+                        aria-label="Backup: import or export browser data"
+                      >
+                        Backup
+                      </Button>
+                    ) : (
+                      <ActionIcon
+                        variant="default"
+                        size="xl"
+                        aria-label="Backup: import or export browser data"
+                      >
+                        <IconDownload size={20} />
+                      </ActionIcon>
+                    )}
                   </Menu.Target>
                   <Menu.Dropdown>
                     <Menu.Item
@@ -4640,21 +4618,30 @@ function App() {
                     </Menu.Item>
                   </Menu.Dropdown>
                 </Menu>
-                <Button
-                  variant={refreshToken ? 'light' : 'default'}
-                  color={refreshToken ? 'teal' : undefined}
-                  size="sm"
-                  leftSection={<IconKey size={16} />}
-                  aria-label={
-                    refreshToken ? 'Signed in. Open token settings' : 'Add refresh token'
-                  }
-                  onClick={() => {
-                    setDraftRefreshToken(refreshToken)
-                    openTokenModal()
-                  }}
-                >
-                  {refreshToken ? 'Signed in' : 'Add token'}
-                </Button>
+                {isWideHeader ? (
+                  <Button
+                    variant={refreshToken ? 'light' : 'default'}
+                    color={refreshToken ? 'teal' : undefined}
+                    size="sm"
+                    leftSection={
+                      refreshToken ? <IconKey size={16} /> : <IconKeyOff size={16} />
+                    }
+                    aria-label={tokenActionLabel}
+                    onClick={handleTokenButtonClick}
+                  >
+                    {refreshToken ? 'Signed in' : 'Add token'}
+                  </Button>
+                ) : (
+                  <ActionIcon
+                    variant={refreshToken ? 'light' : 'default'}
+                    color={refreshToken ? 'teal' : undefined}
+                    size="xl"
+                    aria-label={tokenActionLabel}
+                    onClick={handleTokenButtonClick}
+                  >
+                    {refreshToken ? <IconKey size={20} /> : <IconKeyOff size={20} />}
+                  </ActionIcon>
+                )}
               </Group>
             </Group>
           </Container>
@@ -5742,6 +5729,21 @@ function App() {
           </Container>
           )}
         </AppShell.Main>
+
+        <AppShell.Footer hiddenFrom="sm" withBorder={false}>
+          <UnstyledButton
+            w="100%"
+            h="100%"
+            px="md"
+            onClick={openVersionModal}
+            aria-label={`Version ${BUILD_INFO.version}. Open changelog`}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          >
+            <Text size="xs" c="dimmed" td="underline">
+              {BUILD_INFO.version}
+            </Text>
+          </UnstyledButton>
+        </AppShell.Footer>
       </AppShell>
     </>
   )
