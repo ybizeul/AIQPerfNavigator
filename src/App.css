@@ -8,6 +8,85 @@
   --tooltip-color: var(--mantine-color-white);
 }
 
+/* Charts reserve a band for the legend (see AreaChartWithLegend) so the plot keeps its
+   room. The height is a whole number of measured rows, and the rows past it are scrolled
+   to here rather than in the band, so the gap below the legend stays clear of them.
+   Left alignment gives wrapped rows a straight edge to scan. */
+.chart-legend {
+  align-content: flex-start;
+  justify-content: flex-start;
+  height: var(--chart-legend-rows-height, 100%);
+  padding-bottom: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* A band this short hits its end constantly; without this every legend flick would
+     carry on into the page. */
+  overscroll-behavior: contain;
+  /* The plot below is the only thing worth panning sideways for. */
+  touch-action: pan-y;
+}
+
+/* The recharts wrapper around the band clips an outline drawn outside it, so the ring is
+   inset. Focus is only ever taken when there is something to scroll to. */
+.chart-legend:focus {
+  outline: none;
+}
+
+.chart-legend:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: -2px;
+  border-radius: var(--mantine-radius-sm);
+}
+
+/* Rows below the band need something that says so. A scrollbar alone does not: overlay
+   scrollbars stay invisible until they move, and mobile has no pointer to move them. The
+   fade is dropped at the end of the scroll (see AreaChartWithLegend) so a legend scrolled
+   to its last row does not read as one still hiding a row. */
+.chart-legend-scrollable {
+  mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent);
+}
+
+.chart-legend-scrollable.chart-legend-at-end {
+  mask-image: none;
+}
+
+/* Styling the scrollbar is also what opts a desktop band out of overlay scrollbars. */
+.chart-legend-scrollable::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chart-legend-scrollable::-webkit-scrollbar-thumb {
+  background: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2));
+  border-radius: 4px;
+}
+
+.chart-legend-scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Chromium drops the rules above as soon as a standard scrollbar property is set, so the
+   standard ones are kept for engines that have no scrollbar pseudo-element at all. */
+@supports (scrollbar-width: thin) and (not selector(::-webkit-scrollbar)) {
+  .chart-legend-scrollable {
+    scrollbar-width: thin;
+    scrollbar-color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-dark-2))
+      transparent;
+  }
+}
+
+/* Rows are only interchangeable while every entry is one line tall, which is what lets the
+   band be measured in whole rows. A name too long for the chart is cut with an ellipsis
+   rather than at the edge, so a series with a truncated label still looks like one. */
+.chart-legend-item {
+  min-width: 0;
+}
+
+.chart-legend-item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Mantine's footer offset ignores safe-area padding applied on the footer element. */
 @media (max-width: 47.99em) {
   .mantine-AppShell-root {
@@ -29,9 +108,16 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  max-height: 22rem;
-  max-height: min(22rem, var(--metrics-viewport-height, 22rem));
   overflow: hidden;
+}
+
+/* Single column: the pane grows with the list, so the limit belongs to the scrolling
+   viewport itself. Capping the pane instead would leave flexbox with no definite height to
+   hand the scroller, which would then keep its full content height and be clipped rather
+   than scrolled. The list is the only way to choose what the charts show, so it takes a
+   good share of a phone screen. */
+.metrics-library-viewport {
+  max-height: min(40vh, 22rem);
 }
 
 .metrics-pair-row {
@@ -69,9 +155,14 @@
     height: var(--metrics-viewport-height, calc(100dvh - 16rem));
   }
 
+  /* Two panes: the workspace has a height of its own, so the flex chain can carry it down
+     to the scroller and the pane fills its column. */
   .metrics-library {
-    max-height: none;
     height: 100%;
+  }
+
+  .metrics-library-viewport {
+    max-height: none;
   }
 
   .metrics-main {

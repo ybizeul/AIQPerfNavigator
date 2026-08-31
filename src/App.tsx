@@ -1,6 +1,5 @@
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DateTimePicker } from '@mantine/dates'
-import '@mantine/dates/styles.css'
 import './App.css'
 import {
   ActionIcon,
@@ -46,7 +45,6 @@ import {
   useComputedColorScheme,
   useMantineColorScheme,
 } from '@mantine/core'
-import { AreaChart } from '@mantine/charts'
 import { useDisclosure, useLocalStorage, useMediaQuery } from '@mantine/hooks'
 import {
   IconArrowBack,
@@ -73,6 +71,8 @@ import {
   IconUpload,
   IconX,
 } from '@tabler/icons-react'
+import { AreaChartWithLegend } from './AreaChartWithLegend'
+import { CHART_LOADING_LEGEND_HEIGHT } from './chart-legend'
 import { BUILD_INFO, rememberCurrentVersion, unseenReleaseVersions } from './version'
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
@@ -2292,10 +2292,10 @@ function CapacityHistoryChart({
     <Stack gap="xs">
       <Text fw={500} size="sm">12-month capacity history</Text>
       {isLoading ? (
-        <Skeleton h={220} />
+        <Skeleton h={220 + CHART_LOADING_LEGEND_HEIGHT} />
       ) : data.length > 0 ? (
-        <AreaChart
-          h={220}
+        <AreaChartWithLegend
+          plotHeight={220}
           data={data}
           dataKey="month"
           series={[
@@ -2307,7 +2307,6 @@ function CapacityHistoryChart({
           valueFormatter={(value) => `${value.toFixed(1)} TiB`}
           withDots={false}
           withGradient={false}
-          withLegend
           withTooltip
         />
       ) : (
@@ -3004,10 +3003,12 @@ const METRICS_VIEWPORT_MIN_HEIGHT = 120
    measurement is taken in document coordinates on purpose: the result must not depend
    on the page scroll position it is meant to make unnecessary. */
 function useMetricsViewportHeight() {
-  const ref = useRef<HTMLDivElement>(null)
+  /* State rather than a ref object: the workspace is not in the tree on the first render,
+     so an effect keyed on a plain ref would find nothing and, having no dependency to
+     change, would never look again. */
+  const [element, setElement] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    const element = ref.current
     if (!element) return
 
     let frame = 0
@@ -3044,9 +3045,9 @@ function useMetricsViewportHeight() {
       window.removeEventListener('resize', schedule)
       observer.disconnect()
     }
-  }, [])
+  }, [element])
 
-  return ref
+  return setElement
 }
 
 function MetricsPairLibrary({
@@ -3116,6 +3117,7 @@ function MetricsPairLibrary({
       </div>
       <ScrollArea
         className="metrics-library-scroll"
+        classNames={{ viewport: 'metrics-library-viewport' }}
         type="auto"
         aria-label="Saved HA pairs"
         styles={{ scrollbar: { zIndex: 3 } }}
@@ -5511,10 +5513,10 @@ function App() {
                                                   {node1Label}
                                                 </CopyableText>
                                                 {performanceLoading.has(`${singlePair!.node1.serialNumber}::${graph.name}`) ? (
-                                                  <Skeleton h={220} />
+                                                  <Skeleton h={220 + CHART_LOADING_LEGEND_HEIGHT} />
                                                 ) : node1Data && node1Data.length > 0 ? (
-                                                  <AreaChart
-                                                    h={220}
+                                                  <AreaChartWithLegend
+                                                    plotHeight={220}
                                                     data={node1Data}
                                                     dataKey="timestamp"
                                                     type={isGraphStacked ? 'stacked' : undefined}
@@ -5522,7 +5524,6 @@ function App() {
                                                     curveType="monotone"
                                                     strokeWidth={1}
                                                     withGradient={false}
-                                                    withLegend
                                                     withTooltip
                                                     withDots={false}
                                                   />
@@ -5538,10 +5539,10 @@ function App() {
                                                     {node2Label}
                                                   </CopyableText>
                                                   {performanceLoading.has(`${singlePair!.node2!.serialNumber}::${graph.name}`) ? (
-                                                    <Skeleton h={220} />
+                                                    <Skeleton h={220 + CHART_LOADING_LEGEND_HEIGHT} />
                                                   ) : node2Data && node2Data.length > 0 ? (
-                                                    <AreaChart
-                                                      h={220}
+                                                    <AreaChartWithLegend
+                                                      plotHeight={220}
                                                       data={node2Data}
                                                       dataKey="timestamp"
                                                       type={isGraphStacked ? 'stacked' : undefined}
@@ -5549,7 +5550,6 @@ function App() {
                                                       curveType="monotone"
                                                       strokeWidth={1}
                                                       withGradient={false}
-                                                      withLegend
                                                       withTooltip
                                                       withDots={false}
                                                     />
@@ -5562,11 +5562,11 @@ function App() {
                                               ) : null}
                                             </SimpleGrid>
                                           ) : isLoading ? (
-                                            <Skeleton h={250} />
+                                            <Skeleton h={250 + CHART_LOADING_LEGEND_HEIGHT} />
                                           ) : chartData && chartData.length > 0 ? (
                                             graph.name === 'node_headroom_cpu_utilization' && stackSeries ? (
-                                              <AreaChart
-                                                h={250}
+                                              <AreaChartWithLegend
+                                                plotHeight={250}
                                                 data={chartData}
                                                 dataKey="timestamp"
                                                 type="stacked"
@@ -5613,13 +5613,12 @@ function App() {
                                                   }))
                                                 })()}
                                                 curveType="monotone"
-                                                withLegend
                                                 withTooltip
                                                 withDots={false}
                                               />
                                             ) : (
-                                              <AreaChart
-                                                h={250}
+                                              <AreaChartWithLegend
+                                                plotHeight={250}
                                                 data={chartData}
                                                 dataKey="timestamp"
                                                 strokeWidth={1}
@@ -5675,7 +5674,6 @@ function App() {
                                                   }))
                                                 })()}
                                                 curveType="monotone"
-                                                withLegend
                                                 withTooltip
                                                 withDots={false}
                                               />
