@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DateTimePicker } from '@mantine/dates'
 import './App.css'
 import {
@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Collapse,
   Combobox,
   Container,
   Divider,
@@ -19,7 +20,6 @@ import {
   Menu,
   Modal,
   MultiSelect,
-  Pagination,
   Paper,
   PasswordInput,
   Pill,
@@ -48,10 +48,12 @@ import {
 import { useDisclosure, useLocalStorage, useMediaQuery } from '@mantine/hooks'
 import {
   IconArrowBack,
+  IconBinaryTree,
   IconBookmark,
   IconBuilding,
   IconChartLine,
   IconCheck,
+  IconChevronDown,
   IconCloud,
   IconCopy,
   IconDeviceDesktop,
@@ -61,10 +63,12 @@ import {
   IconKey,
   IconKeyOff,
   IconLock,
+  IconMapPin,
   IconMoon,
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconServer,
   IconSun,
   IconTag,
   IconTrash,
@@ -73,6 +77,29 @@ import {
 } from '@tabler/icons-react'
 import { AreaChartWithLegend } from './AreaChartWithLegend'
 import { CHART_LOADING_LEGEND_HEIGHT } from './chart-legend'
+import {
+  customerPairCount,
+  groupPairTotals,
+  groupPairsByCluster,
+  groupPairsForDisplay,
+  initialRevealKeys,
+  nagpPairCount,
+  nextRevealKey,
+  planGroupReveals,
+  remapRevealedKeys,
+  scopedClusterKey,
+  scopedCustomerKey,
+  scopedSiteKey,
+  sitePairCount,
+  sliceGroupsByRevealKeys,
+  sortPairsForDisplay,
+  visibleRevealPairCount,
+  type ClusterGroup,
+  type CustomerGroup,
+  type GroupTotals,
+  type NagpGroup,
+  type SiteGroup,
+} from './result-groups'
 import { BUILD_INFO, rememberCurrentVersion, unseenReleaseVersions } from './version'
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
@@ -952,145 +979,6 @@ function pairSerialLabel(pair: HAPair | SavedHAPair) {
     : pair.node1.serialNumber
 }
 
-type CustomerGroup<T extends HAPair | SavedHAPair = HAPair | SavedHAPair> = {
-  customerId: string | null
-  customerName: string | null
-  siteName: string | null
-  siteId: string | null
-  nagpId: string | null
-  nagpName: string | null
-  pairs: T[]
-}
-
-type ClusterGroup<T extends HAPair | SavedHAPair = HAPair | SavedHAPair> = {
-  clusterId: string | null
-  clusterName: string | null
-  pairs: T[]
-}
-
-function groupPairsByCluster<T extends HAPair | SavedHAPair>(pairs: T[]): ClusterGroup<T>[] {
-  const groups = new Map<string, T[]>()
-  
-  for (const pair of pairs) {
-    const clusterId = pair.node1.cluster?.id ?? null
-    const clusterName = pair.node1.cluster?.name ?? null
-    const key = `${clusterId ?? ''}::${clusterName ?? ''}`
-    const existing = groups.get(key) ?? []
-    existing.push(pair)
-    groups.set(key, existing)
-  }
-  
-  // Sort: clusters with names first (alphabetically), then by ID, then unknown
-  const sortedEntries = Array.from(groups.entries()).sort(([a], [b]) => {
-    const [aId, aName] = a.split('::')
-    const [bId, bName] = b.split('::')
-    
-    // Sort by cluster name
-    if (aName !== bName) {
-      if (!aName) return 1
-      if (!bName) return -1
-      return aName.localeCompare(bName)
-    }
-    
-    // Same name or both empty, sort by ID
-    if (!aId) return 1
-    if (!bId) return -1
-    return aId.localeCompare(bId)
-  })
-  
-  return sortedEntries.map(([key, pairs]) => {
-    const [clusterId, clusterName] = key.split('::')
-    return {
-      clusterId: clusterId || null,
-      clusterName: clusterName || null,
-      pairs,
-    }
-  })
-}
-
-function normalizeForGrouping(value: string | null | undefined): string {
-  if (!value) return ''
-  // Trim, lowercase, and collapse multiple spaces to single space
-  return value.trim().toLowerCase().replace(/\s+/g, ' ')
-}
-
-function groupPairsByCustomer<T extends HAPair | SavedHAPair>(pairs: T[]): CustomerGroup<T>[] {
-  // First, sort all pairs by customer and site to ensure consistent ordering
-  const sortedPairs = [...pairs].sort((a, b) => {
-    const aCustomer = normalizeForGrouping(a.node1.customer?.name ?? a.node1.nagp?.name)
-    const bCustomer = normalizeForGrouping(b.node1.customer?.name ?? b.node1.nagp?.name)
-    const aSiteId = a.node1.site?.id ?? a.node1.site?.cmatId ?? ''
-    const bSiteId = b.node1.site?.id ?? b.node1.site?.cmatId ?? ''
-    const aSite = normalizeForGrouping(a.node1.site?.name)
-    const bSite = normalizeForGrouping(b.node1.site?.name)
-    
-    const customerCompare = aCustomer.localeCompare(bCustomer)
-    if (customerCompare !== 0) return customerCompare
-    
-    // Sort by site ID first (more reliable), then by site name
-    const siteIdCompare = aSiteId.localeCompare(bSiteId)
-    if (siteIdCompare !== 0) return siteIdCompare
-    
-    return aSite.localeCompare(bSite)
-  })
-  
-  const groups = new Map<string, T[]>()
-  
-  for (const pair of sortedPairs) {
-    const customerName = pair.node1.customer?.name ?? pair.node1.nagp?.name ?? null
-    const siteId = pair.node1.site?.id ?? pair.node1.site?.cmatId ?? null
-    const siteName = pair.node1.site?.name ?? null
-    // Group by customer and site ID (more reliable than name)
-    // Fall back to site name if no ID available
-    const key = `${normalizeForGrouping(customerName)}::${siteId ?? normalizeForGrouping(siteName)}`
-    const existing = groups.get(key) ?? []
-    existing.push(pair)
-    groups.set(key, existing)
-  }
-  
-  // Sort groups: customers with names first (alphabetically), then by site
-  const sortedEntries = Array.from(groups.entries()).sort(([a], [b]) => {
-    const [aCustomer, aSite] = a.split('::')
-    const [bCustomer, bSite] = b.split('::')
-    
-    // Sort by customer name
-    if (!aCustomer && !bCustomer) {
-      // Both unknown, sort by site
-      if (!aSite) return 1
-      if (!bSite) return -1
-      return aSite.localeCompare(bSite)
-    }
-    if (!aCustomer) return 1
-    if (!bCustomer) return -1
-    
-    const customerCompare = aCustomer.localeCompare(bCustomer)
-    if (customerCompare !== 0) return customerCompare
-    
-    // Same customer, sort by site
-    if (!aSite) return 1
-    if (!bSite) return -1
-    return aSite.localeCompare(bSite)
-  })
-  
-  return sortedEntries.map(([, pairs]) => {
-    // Use actual customer/site names from the first pair (preserve original casing)
-    const customerId = pairs[0]?.node1.customer?.id ?? null
-    const customerName = pairs[0]?.node1.customer?.name ?? pairs[0]?.node1.nagp?.name ?? null
-    const siteName = pairs[0]?.node1.site?.name ?? null
-    const siteId = pairs[0]?.node1.site?.id ?? pairs[0]?.node1.site?.cmatId ?? null
-    const nagpId = pairs[0]?.node1.nagp?.id ?? null
-    return {
-      customerId: customerId || null,
-      customerName: customerName || null,
-      siteName: siteName || null,
-      siteId: siteId || null,
-      nagpId: nagpId || null,
-      nagpName: pairs[0]?.node1.nagp?.name ?? null,
-      pairs,
-    }
-  })
-}
-
 function buildQueryVariables(
   scope: SearchScope,
   queryType: SearchQueryType,
@@ -1892,23 +1780,143 @@ function SaveScopeButton({
   label,
   alreadySaved,
   onSave,
+  unavailableReason,
 }: {
   label: string
   alreadySaved: boolean
   onSave: () => void
+  unavailableReason?: string
 }) {
-  return (
+  const disabled = alreadySaved || !!unavailableReason
+  const ariaLabel = unavailableReason
+    ? unavailableReason
+    : alreadySaved
+      ? `${label} already saved as a filter`
+      : `Save ${label} as a filter`
+  const button = (
     <Button
-      size="compact-xs"
+      size="compact-sm"
       variant="light"
       color={alreadySaved ? 'teal' : 'blue'}
       leftSection={alreadySaved ? <IconCheck size={12} /> : <IconPlus size={12} />}
-      aria-label={alreadySaved ? `${label} already saved as a filter` : `Save ${label} as a filter`}
+      aria-label={ariaLabel}
       onClick={onSave}
-      disabled={alreadySaved}
+      disabled={disabled}
     >
       {alreadySaved ? 'Saved as filter' : 'Save as filter'}
     </Button>
+  )
+  if (!unavailableReason || alreadySaved) return button
+  return (
+    <Tooltip label={unavailableReason} withArrow>
+      <span>{button}</span>
+    </Tooltip>
+  )
+}
+
+function scopeHeading(name: string | null, id: string | null, unknownLabel: string, idPrefix: string) {
+  if (name) return name
+  if (id) return `${idPrefix} ${id}`
+  return unknownLabel
+}
+
+function panelDomId(prefix: string, key: string) {
+  return `${prefix}-${key.replace(/[^a-zA-Z0-9_-]+/g, '-')}`
+}
+
+function GroupDisclosure({
+  opened,
+  onToggle,
+  contentId,
+  children,
+}: {
+  opened: boolean
+  onToggle: () => void
+  contentId: string
+  children: ReactNode
+}) {
+  return (
+    <UnstyledButton
+      type="button"
+      className="group-disclosure"
+      onClick={onToggle}
+      aria-expanded={opened}
+      aria-controls={contentId}
+    >
+      <Group gap="xs" wrap="nowrap" align="flex-start">
+        <IconChevronDown
+          size={16}
+          aria-hidden
+          style={{
+            flexShrink: 0,
+            marginTop: 6,
+            transform: opened ? 'rotate(0deg)' : 'rotate(-90deg)',
+            transition: 'transform 150ms ease',
+          }}
+        />
+        {children}
+      </Group>
+    </UnstyledButton>
+  )
+}
+
+function toggleCollapsedKey(current: Set<string>, key: string) {
+  const next = new Set(current)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  return next
+}
+
+function NagpHeader({
+  group,
+  onSaveNagp,
+  nagpAlreadySaved,
+  pairCount,
+  visiblePairCount,
+}: {
+  group: NagpGroup
+  onSaveNagp?: () => void
+  nagpAlreadySaved?: boolean
+  pairCount: number
+  visiblePairCount: number
+}) {
+  const pairLabel =
+    visiblePairCount < pairCount
+      ? `${visiblePairCount} of ${pairCount} HA pairs`
+      : `${pairCount} HA pair${pairCount !== 1 ? 's' : ''}`
+  return (
+    <Group gap="xs" mb="xs" wrap="nowrap" align="flex-start">
+      <ThemeIcon variant="light" color="violet" size="md">
+        <IconBinaryTree size={16} />
+      </ThemeIcon>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <Group gap={4} wrap="wrap">
+          <Title order={4} fz="md" fw={700} m={0} style={{ minWidth: 0 }}>
+            {scopeHeading(group.nagpName, group.nagpId, 'Unknown NAGP', 'NAGP')}
+          </Title>
+          {onSaveNagp ? (
+            <SaveScopeButton
+              label="NAGP"
+              alreadySaved={!!nagpAlreadySaved}
+              onSave={onSaveNagp}
+              unavailableReason={
+                group.nagpId ? undefined : 'Needs a NAGP ID to save as a filter'
+              }
+            />
+          ) : null}
+        </Group>
+        <Group gap="md">
+          {group.nagpId ? (
+            <Text size="xs" c="dimmed">
+              NAGP ID: {group.nagpId}
+            </Text>
+          ) : null}
+          <Text size="xs" c="dimmed">
+            {pairLabel}
+          </Text>
+        </Group>
+      </div>
+    </Group>
   )
 }
 
@@ -1916,57 +1924,113 @@ function CustomerHeader({
   group,
   onSaveCustomer,
   customerAlreadySaved,
-  onSaveNagp,
-  nagpAlreadySaved,
+  pairCount,
+  visiblePairCount,
+  opened,
+  onToggle,
+  contentId,
 }: {
   group: CustomerGroup
   onSaveCustomer?: () => void
   customerAlreadySaved?: boolean
-  onSaveNagp?: () => void
-  nagpAlreadySaved?: boolean
+  pairCount: number
+  visiblePairCount: number
+  opened: boolean
+  onToggle: () => void
+  contentId: string
 }) {
+  const heading = scopeHeading(group.customerName, group.customerId, 'Unknown client', 'Client')
+  const pairLabel =
+    visiblePairCount < pairCount
+      ? `${visiblePairCount} of ${pairCount} HA pairs`
+      : `${pairCount} HA pair${pairCount !== 1 ? 's' : ''}`
   return (
-    <Group gap="xs" mb="xs">
-      <ThemeIcon variant="light" color="blue" size="md">
-        <IconBuilding size={16} />
-      </ThemeIcon>
-      <div>
-        <Group gap={4}>
-          <Text fw={600} size="sm">
-            {group.customerName || 'Unknown customer'}
-          </Text>
-          {onSaveCustomer ? (
-            <SaveScopeButton
-              label="customer"
-              alreadySaved={!!customerAlreadySaved}
-              onSave={onSaveCustomer}
-            />
-          ) : null}
-        </Group>
-        <Group gap="md">
-          <Text size="xs" c="dimmed">
-            Site: {group.siteName || 'Unknown'}{group.siteId ? ` (${group.siteId})` : ''}
-          </Text>
-          {group.nagpId ? (
-            <Group gap={4}>
-              <Text size="xs" c="dimmed">
-                {group.nagpName ? `${group.nagpName} (${group.nagpId})` : group.nagpId}
-              </Text>
-              {onSaveNagp ? (
-                <SaveScopeButton
-                  label="NAGP"
-                  alreadySaved={!!nagpAlreadySaved}
-                  onSave={onSaveNagp}
-                />
+    <Group gap="xs" wrap="wrap" align="flex-start">
+      <div style={{ minWidth: 0, flex: '1 1 12rem' }}>
+        <GroupDisclosure
+          opened={opened}
+          onToggle={onToggle}
+          contentId={contentId}
+        >
+          <ThemeIcon variant="light" color="blue" size="md">
+            <IconBuilding size={16} />
+          </ThemeIcon>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Text size="sm" fw={600} lineClamp={1} ta="start">
+              {heading}
+            </Text>
+            <Group gap="md">
+              {group.customerId ? (
+                <Text size="xs" c="dimmed" fw={400}>
+                  Client ID: {group.customerId}
+                </Text>
               ) : null}
+              <Text size="xs" c="dimmed" fw={400}>
+                {pairLabel}
+              </Text>
             </Group>
+          </div>
+        </GroupDisclosure>
+      </div>
+      {onSaveCustomer ? (
+        <SaveScopeButton
+          label="client"
+          alreadySaved={!!customerAlreadySaved}
+          onSave={onSaveCustomer}
+          unavailableReason={
+            group.customerId ? undefined : 'Needs a Client ID to save as a filter'
+          }
+        />
+      ) : null}
+    </Group>
+  )
+}
+
+function SiteHeader({
+  group,
+  pairCount,
+  visiblePairCount,
+  opened,
+  onToggle,
+  contentId,
+}: {
+  group: SiteGroup
+  pairCount: number
+  visiblePairCount: number
+  opened: boolean
+  onToggle: () => void
+  contentId: string
+}) {
+  const heading = scopeHeading(group.siteName, group.siteId, 'Unknown site', 'Site')
+  const pairLabel =
+    visiblePairCount < pairCount
+      ? `${visiblePairCount} of ${pairCount} HA pairs`
+      : `${pairCount} HA pair${pairCount !== 1 ? 's' : ''}`
+  return (
+    <GroupDisclosure
+      opened={opened}
+      onToggle={onToggle}
+      contentId={contentId}
+    >
+      <ThemeIcon variant="light" color="teal" size="sm">
+        <IconMapPin size={14} />
+      </ThemeIcon>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <Text size="sm" fw={500} lineClamp={1} ta="start">
+          {heading}
+        </Text>
+        <Group gap="md">
+          {group.siteId ? (
+            <Text size="xs" c="dimmed">
+              Site ID: {group.siteId}
+            </Text>
           ) : null}
           <Text size="xs" c="dimmed">
-            {group.pairs.length} HA pair{group.pairs.length !== 1 ? 's' : ''}
+            {pairLabel}
           </Text>
         </Group>
       </div>
-    </Group>
+    </GroupDisclosure>
   )
 }
 
@@ -1976,23 +2040,27 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
   onAddCluster,
   isAddingCluster,
   clusterAddDisabled,
+  pairCount,
 }: {
   clusterGroup: ClusterGroup<T>
   renderPair: (pair: T) => ReactNode
   onAddCluster?: () => void
   isAddingCluster?: boolean
   clusterAddDisabled?: boolean
+  pairCount: number
 }) {
   return (
-    <Stack component="section" gap="xs">
+    <Paper component="section" withBorder radius="md" className="result-cluster">
       <Group
+        className="result-cluster-header"
         gap="xs"
         justify="space-between"
         wrap="wrap"
-        pb={4}
-        style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}
       >
-        <Group gap="xs" wrap="nowrap">
+        <Group gap="xs" wrap="wrap" style={{ minWidth: 0, flex: '1 1 12rem' }}>
+          <ThemeIcon variant="light" color="gray" size="sm">
+            <IconServer size={14} />
+          </ThemeIcon>
           {clusterGroup.clusterName ? (
             <CopyableText fw={600} size="sm" textToCopy={clusterGroup.clusterName}>
               {clusterGroup.clusterName}
@@ -2004,7 +2072,7 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
           )}
           {onAddCluster ? (
             <Button
-              size="compact-xs"
+              size="compact-sm"
               variant="light"
               loading={isAddingCluster}
               disabled={clusterAddDisabled}
@@ -2014,15 +2082,315 @@ function ClusterBlock<T extends HAPair | SavedHAPair>({
             </Button>
           ) : null}
         </Group>
-        <Text size="xs" c="dimmed">
-          {clusterGroup.pairs.length} HA pair{clusterGroup.pairs.length !== 1 ? 's' : ''}
-        </Text>
+        <Badge size="xs" variant="light" color="gray">
+          {pairCount} HA pair{pairCount !== 1 ? 's' : ''}
+        </Badge>
       </Group>
-      {clusterGroup.pairs.map((pair) => (
-        <div key={pair.key}>
-          {renderPair(pair)}
-        </div>
-      ))}
+      <Stack gap="xs" p="sm">
+        {clusterGroup.pairs.map((pair) => (
+          <div key={pair.key}>
+            {renderPair(pair)}
+          </div>
+        ))}
+      </Stack>
+    </Paper>
+  )
+}
+
+function GroupedPairSections<T extends HAPair | SavedHAPair>({
+  groups,
+  renderPair,
+  onSaveNagp,
+  nagpIsSaved,
+  onSaveCustomer,
+  customerIsSaved,
+  onAddCluster,
+  isClusterAdding,
+  isClusterAddDisabled,
+  totals,
+  progressive = false,
+  isLoading = false,
+}: {
+  groups: NagpGroup<T>[]
+  renderPair: (pair: T) => ReactNode
+  onSaveNagp?: (group: NagpGroup<T>) => void
+  nagpIsSaved?: (group: NagpGroup<T>) => boolean
+  onSaveCustomer?: (group: CustomerGroup<T>) => void
+  customerIsSaved?: (group: CustomerGroup<T>) => boolean
+  onAddCluster?: (clusterGroup: ClusterGroup<T>) => void
+  isClusterAdding?: (clusterGroup: ClusterGroup<T>) => boolean
+  isClusterAddDisabled?: (clusterGroup: ClusterGroup<T>) => boolean
+  totals?: GroupTotals
+  progressive?: boolean
+  isLoading?: boolean
+}) {
+  const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(() => new Set())
+  const revealUnits = useMemo(() => planGroupReveals(groups), [groups])
+  const [revealState, setRevealState] = useState(() => ({
+    units: revealUnits,
+    keys: progressive
+      ? initialRevealKeys(revealUnits)
+      : new Set(revealUnits.map((unit) => unit.key)),
+  }))
+  let revealedUnitKeys = revealState.keys
+  if (revealState.units !== revealUnits) {
+    revealedUnitKeys = remapRevealedKeys(
+      revealState.units,
+      revealUnits,
+      revealState.keys,
+    )
+    setRevealState({ units: revealUnits, keys: revealedUnitKeys })
+  }
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  const revealUnitsRef = useRef(revealUnits)
+  const collapsedKeysRef = useRef(collapsedKeys)
+  const suppressRevealRef = useRef(false)
+  const suppressRevealTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    revealUnitsRef.current = revealUnits
+    collapsedKeysRef.current = collapsedKeys
+  }, [collapsedKeys, revealUnits])
+
+  const revealNextUnit = (
+    nextCollapsedKeys: ReadonlySet<string>,
+    ancestorKey?: string,
+  ) => {
+    setRevealState((current) => {
+      const currentUnits = revealUnitsRef.current
+      const remappedKeys = remapRevealedKeys(current.units, currentUnits, current.keys)
+      const nextKey = nextRevealKey(currentUnits, remappedKeys, nextCollapsedKeys)
+      if (!nextKey) {
+        return current.units === currentUnits
+          ? current
+          : { units: currentUnits, keys: remappedKeys }
+      }
+      const nextUnit = currentUnits.find((unit) => unit.key === nextKey)
+      if (
+        ancestorKey &&
+        nextUnit?.customerKey !== ancestorKey &&
+        nextUnit?.siteKey !== ancestorKey
+      ) {
+        return current
+      }
+      return {
+        units: currentUnits,
+        keys: new Set([...remappedKeys, nextKey]),
+      }
+    })
+  }
+
+  const toggleGroup = (key: string) => {
+    const isExpanding = collapsedKeys.has(key)
+    const nextCollapsedKeys = toggleCollapsedKey(collapsedKeys, key)
+    setCollapsedKeys(nextCollapsedKeys)
+    if (!isExpanding) {
+      suppressRevealRef.current = true
+      if (suppressRevealTimeoutRef.current !== null) {
+        window.clearTimeout(suppressRevealTimeoutRef.current)
+      }
+      suppressRevealTimeoutRef.current = window.setTimeout(() => {
+        suppressRevealRef.current = false
+        suppressRevealTimeoutRef.current = null
+      }, 220)
+      return
+    }
+    revealNextUnit(nextCollapsedKeys, key)
+  }
+  const validRevealedKeys = new Set(
+    revealUnits
+      .filter((unit) => !progressive || revealedUnitKeys.has(unit.key))
+      .map((unit) => unit.key),
+  )
+  const effectiveRevealedKeys =
+    progressive && validRevealedKeys.size === 0
+      ? initialRevealKeys(revealUnits)
+      : validRevealedKeys
+  const visibleGroups = progressive
+    ? sliceGroupsByRevealKeys(groups, revealUnits, effectiveRevealedKeys)
+    : groups
+  const visiblePairCount = visibleRevealPairCount(revealUnits, effectiveRevealedKeys)
+  const allRevealKeys = new Set(revealUnits.map((unit) => unit.key))
+  const totalPairCount = visibleRevealPairCount(revealUnits, allRevealKeys)
+  const hasMoreGroups = effectiveRevealedKeys.size < revealUnits.length
+  const nextVisibleRevealKey = nextRevealKey(
+    revealUnits,
+    effectiveRevealedKeys,
+    collapsedKeys,
+  )
+
+  useEffect(() => {
+    return () => {
+      if (suppressRevealTimeoutRef.current !== null) {
+        window.clearTimeout(suppressRevealTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!progressive || !sentinel) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting || suppressRevealRef.current) return
+        revealNextUnit(collapsedKeysRef.current)
+      },
+      { rootMargin: '100px 0px' },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [progressive, revealUnits])
+
+  return (
+    <Stack gap="lg">
+      {progressive ? (
+        <Text size="sm" c="dimmed">
+          Showing {visiblePairCount} of {totalPairCount} fetched HA pairs.
+        </Text>
+      ) : null}
+      {visibleGroups.map((nagpGroup) => {
+        const nagpCount = totals?.nagp[nagpGroup.key] ?? nagpPairCount(nagpGroup)
+        return (
+          <Paper
+            key={nagpGroup.key}
+            component="section"
+            withBorder
+            radius="md"
+            p={{ base: 'sm', sm: 'md' }}
+            className="result-nagp"
+          >
+            <NagpHeader
+              group={nagpGroup}
+              onSaveNagp={onSaveNagp ? () => onSaveNagp(nagpGroup) : undefined}
+              nagpAlreadySaved={nagpIsSaved?.(nagpGroup)}
+              pairCount={nagpCount}
+              visiblePairCount={nagpPairCount(nagpGroup)}
+            />
+            <Stack gap="sm" className="result-children">
+              {nagpGroup.customers.map((customerGroup) => {
+                const customerScoped = scopedCustomerKey(nagpGroup.key, customerGroup.key)
+                const customerCount = totals?.customer[customerScoped] ?? customerPairCount(customerGroup)
+                const customerOpen = !collapsedKeys.has(customerScoped)
+                const customerPanelId = panelDomId('client', customerScoped)
+                return (
+                  <Stack
+                    key={customerGroup.key}
+                    component="section"
+                    gap={4}
+                    className="result-client"
+                  >
+                    <CustomerHeader
+                      group={customerGroup}
+                      onSaveCustomer={onSaveCustomer
+                        ? () => onSaveCustomer(customerGroup)
+                        : undefined}
+                      customerAlreadySaved={customerIsSaved?.(customerGroup)}
+                      pairCount={customerCount}
+                      visiblePairCount={customerPairCount(customerGroup)}
+                      opened={customerOpen}
+                      onToggle={() => toggleGroup(customerScoped)}
+                      contentId={customerPanelId}
+                    />
+                    <Collapse expanded={customerOpen} id={customerPanelId}>
+                    <Stack gap="sm" className="result-children">
+                      {customerGroup.sites.map((siteGroup) => {
+                        const siteScoped = scopedSiteKey(
+                          nagpGroup.key,
+                          customerGroup.key,
+                          siteGroup.key,
+                        )
+                        const siteCount = totals?.site[siteScoped] ?? sitePairCount(siteGroup)
+                        const clusterBlocks = siteGroup.clusters.map((clusterGroup) => {
+                          const clusterScoped = scopedClusterKey(
+                            nagpGroup.key,
+                            customerGroup.key,
+                            siteGroup.key,
+                            clusterGroup.key,
+                          )
+                          const clusterCount =
+                            totals?.cluster[clusterScoped] ?? clusterGroup.pairs.length
+                          return (
+                            <ClusterBlock
+                              key={clusterGroup.key}
+                              clusterGroup={clusterGroup}
+                              onAddCluster={clusterGroup.clusterId && onAddCluster
+                                ? () => onAddCluster(clusterGroup)
+                                : undefined}
+                              isAddingCluster={isClusterAdding?.(clusterGroup)}
+                              clusterAddDisabled={isClusterAddDisabled?.(clusterGroup)}
+                              renderPair={renderPair}
+                              pairCount={clusterCount}
+                            />
+                          )
+                        })
+                        const hasSiteIdentity = !!(siteGroup.siteId || siteGroup.siteName)
+                        if (!hasSiteIdentity) {
+                          return <Fragment key={siteGroup.key}>{clusterBlocks}</Fragment>
+                        }
+                        const siteOpen = !collapsedKeys.has(siteScoped)
+                        const sitePanelId = panelDomId('site', siteScoped)
+                        return (
+                          <Stack key={siteGroup.key} component="section" gap="xs">
+                            <SiteHeader
+                              group={siteGroup}
+                              pairCount={siteCount}
+                              visiblePairCount={sitePairCount(siteGroup)}
+                              opened={siteOpen}
+                              onToggle={() => toggleGroup(siteScoped)}
+                              contentId={sitePanelId}
+                            />
+                            <Collapse expanded={siteOpen} id={sitePanelId}>
+                            <Stack gap="xs">
+                              {clusterBlocks}
+                            </Stack>
+                            </Collapse>
+                          </Stack>
+                        )
+                      })}
+                    </Stack>
+                    </Collapse>
+                  </Stack>
+                )
+              })}
+            </Stack>
+          </Paper>
+        )
+      })}
+      {progressive ? (
+        <Group
+          ref={sentinelRef}
+          justify="center"
+          gap="xs"
+          py="sm"
+          aria-live="polite"
+        >
+          {hasMoreGroups && nextVisibleRevealKey ? (
+            <>
+              <Text size="sm" c="dimmed">More groups available.</Text>
+              <Button
+                size="compact-sm"
+                variant="subtle"
+                onClick={() => revealNextUnit(collapsedKeys)}
+              >
+                Load more
+              </Button>
+            </>
+          ) : hasMoreGroups ? (
+            <Text size="xs" c="dimmed">
+              Expand a group to load its remaining results.
+            </Text>
+          ) : isLoading ? (
+            <Text size="xs" c="dimmed">
+              Showing all fetched HA pairs — search still in progress.
+            </Text>
+          ) : (
+            <Text size="xs" c="dimmed">
+              All {totalPairCount} HA pairs shown.
+            </Text>
+          )}
+        </Group>
+      ) : null}
     </Stack>
   )
 }
@@ -2735,30 +3103,54 @@ function VolumesPanelSkeleton({ showNodeColumn = false }: { showNodeColumn?: boo
 
 function SearchResultsSkeleton() {
   return (
-    <Stack gap="md">
+    <Stack gap="lg">
       {Array.from({ length: 2 }, (_, groupIndex) => (
-        <Paper key={groupIndex} withBorder radius="md" p="md">
-          <Stack gap="xs">
-            <Skeleton h={16} w={180} radius="sm" />
-            {Array.from({ length: 2 }, (_, cardIndex) => (
-              <Paper key={cardIndex} withBorder radius="md" p="sm">
-                <Stack gap="sm">
-                  <Group grow>
-                    <Stack gap={6}>
-                      <Skeleton h={14} w="60%" radius="sm" />
-                      <Skeleton h={10} w="40%" radius="sm" />
-                      <Skeleton h={8} radius="xl" />
-                    </Stack>
-                    <Stack gap={6}>
-                      <Skeleton h={14} w="60%" radius="sm" />
-                      <Skeleton h={10} w="40%" radius="sm" />
-                      <Skeleton h={8} radius="xl" />
-                    </Stack>
-                  </Group>
-                  <Skeleton h={28} radius="sm" />
+        <Paper key={groupIndex} withBorder radius="md" p={{ base: 'sm', sm: 'md' }}>
+          <Group gap="xs" mb="sm">
+            <Skeleton h={28} w={28} circle />
+            <Stack gap={5}>
+              <Skeleton h={14} w={160} radius="sm" />
+              <Skeleton h={9} w={110} radius="sm" />
+            </Stack>
+          </Group>
+          <Stack gap="sm" className="result-children">
+            <Group gap="xs" wrap="nowrap">
+              <Skeleton h={16} w={16} circle />
+              <Skeleton h={28} w={28} circle />
+              <Stack gap={5}>
+                <Skeleton h={12} w={140} radius="sm" />
+                <Skeleton h={9} w={100} radius="sm" />
+              </Stack>
+            </Group>
+            <Stack gap="sm" className="result-children">
+              <Group gap="xs" wrap="nowrap">
+                <Skeleton h={16} w={16} circle />
+                <Skeleton h={22} w={22} circle />
+                <Stack gap={5}>
+                  <Skeleton h={10} w={120} radius="sm" />
+                  <Skeleton h={8} w={90} radius="sm" />
+                </Stack>
+              </Group>
+              <Paper withBorder radius="md">
+                <Group className="result-cluster-header" justify="space-between">
+                  <Skeleton h={12} w={120} radius="sm" />
+                  <Skeleton h={18} w={62} radius="xl" />
+                </Group>
+                <Stack gap="xs" p="sm">
+                  {Array.from({ length: 2 }, (_, cardIndex) => (
+                    <Paper key={cardIndex} withBorder radius="md" p="sm">
+                      <Stack gap="sm">
+                        <Group grow>
+                          <Skeleton h={48} radius="sm" />
+                          <Skeleton h={48} radius="sm" />
+                        </Group>
+                        <Skeleton h={28} radius="sm" />
+                      </Stack>
+                    </Paper>
+                  ))}
                 </Stack>
               </Paper>
-            ))}
+            </Stack>
           </Stack>
         </Paper>
       ))}
@@ -3215,26 +3607,20 @@ function HAPairCard({
       <HardwareModelCornerBadge pair={pair} />
 
       <Stack gap="sm" pt={getPairModels(pair).displayedModels.length > 0 ? 'sm' : 0}>
-        {/* Two nodes side by side */}
-        <div style={{ display: 'flex', gap: 'var(--mantine-spacing-md)', alignItems: 'flex-start' }}>
-          <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo
-              node={node1}
-              label="Node 1"
-              workloads={node1Workloads}
-              workloadsLoading={node1WorkloadsLoading}
-            />
-          </div>
-          <Divider orientation="vertical" />
-          <div style={{ flex: '1 1 50%', minWidth: 0 }}>
-            <NodeInfo
-              node={node2}
-              label="Node 2"
-              workloads={node2Workloads}
-              workloadsLoading={node2WorkloadsLoading}
-            />
-          </div>
-        </div>
+        <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="md">
+          <NodeInfo
+            node={node1}
+            label="Node 1"
+            workloads={node1Workloads}
+            workloadsLoading={node1WorkloadsLoading}
+          />
+          <NodeInfo
+            node={node2}
+            label="Node 2"
+            workloads={node2Workloads}
+            workloadsLoading={node2WorkloadsLoading}
+          />
+        </SimpleGrid>
 
         {node1.customerGroup ? (
           <Group gap={4} wrap="wrap">
@@ -3376,7 +3762,7 @@ function App() {
   const [dateRange, setDateRange] = useState('7')
   const [customStartDate, setCustomStartDate] = useState<Date | null>(null)
   const [customEndDate, setCustomEndDate] = useState<Date | null>(null)
-  const [searchPage, setSearchPage] = useState(1)
+  const [searchResultsEpoch, setSearchResultsEpoch] = useState(0)
   const [showSavedOnly, setShowSavedOnly] = useState(false)
   const [stackSeries, setStackSeries] = useState(true)
   const [showHeadroom, setShowHeadroom] = useState(false)
@@ -3611,16 +3997,24 @@ function App() {
   }, [sortedSavedPairs, metricsTagFilter])
 
   const filteredSearchResults = useMemo(() => {
-    if (!showSavedOnly) return results.pairs
-    return results.pairs.filter((pair) => savedPairMap.has(pair.key))
+    const pairs = showSavedOnly
+      ? results.pairs.filter((pair) => savedPairMap.has(pair.key))
+      : results.pairs
+    return sortPairsForDisplay(pairs)
   }, [results.pairs, showSavedOnly, savedPairMap])
 
-  const RESULTS_PER_PAGE = 20
-  const totalPages = Math.ceil(filteredSearchResults.length / RESULTS_PER_PAGE)
-  const paginatedSearchResults = useMemo(() => {
-    const start = (searchPage - 1) * RESULTS_PER_PAGE
-    return filteredSearchResults.slice(start, start + RESULTS_PER_PAGE)
-  }, [filteredSearchResults, searchPage])
+  const searchGroups = useMemo(
+    () => groupPairsForDisplay(filteredSearchResults),
+    [filteredSearchResults],
+  )
+  const searchGroupTotals = useMemo(
+    () => groupPairTotals(searchGroups),
+    [searchGroups],
+  )
+  const filteredSavedGroups = useMemo(
+    () => groupPairsForDisplay(filteredSavedPairs),
+    [filteredSavedPairs],
+  )
 
   const consolidatedPerformanceData = useMemo(() => {
     const result = new Map<string, ChartDataPoint[]>()
@@ -3825,7 +4219,7 @@ function App() {
     setIsLoading(true)
     setSearchError(null)
     setClusterSaveError(null)
-    setSearchPage(1)
+    setSearchResultsEpoch((current) => current + 1)
     setResults(EMPTY_SEARCH_RESULTS)
 
     const publishResults = (nextResults: SearchResultState) => {
@@ -3962,7 +4356,7 @@ function App() {
     setSearchError(null)
     setClusterSaveError(null)
     setShowSavedOnly(false)
-    setSearchPage(1)
+    setSearchResultsEpoch((current) => current + 1)
     setResults(EMPTY_SEARCH_RESULTS)
   }
 
@@ -4623,12 +5017,11 @@ function App() {
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
-            Customers and NAGPs saved from search, used as scope chips in the search box.
+            Clients and NAGPs saved from search, used as scope chips in the search box.
           </Text>
           {savedScopeEntries.length === 0 ? (
             <Text c="dimmed">
-              None yet. Use the plus next to a customer name or NAGP ID in search results to save
-              a filter.
+              None yet. Use Save as filter on a NAGP or client in search results.
             </Text>
           ) : (
             <Stack gap="sm">
@@ -4640,13 +5033,13 @@ function App() {
                         <Text fw={600}>{entry.name}</Text>
                         <Badge
                           size="xs"
-                          color={entry.kind === 'customer' ? 'blue' : 'grape'}
+                          color={entry.kind === 'customer' ? 'blue' : 'violet'}
                         >
-                          {entry.kind === 'customer' ? 'Customer' : 'NAGP'}
+                          {entry.kind === 'customer' ? 'Client' : 'NAGP'}
                         </Badge>
                       </Group>
                       <Text size="sm" c="dimmed">
-                        {entry.kind === 'customer' ? 'Customer ID' : 'NAGP ID'}: {entry.id}
+                        {entry.kind === 'customer' ? 'Client ID' : 'NAGP ID'}: {entry.id}
                       </Text>
                     </Stack>
                     <ActionIcon
@@ -5014,7 +5407,7 @@ function App() {
                     {results.siteFilterWasClientSide ? (
                       <Alert color="blue" title="Customer site is checked after search">
                         Customer site is applied to the systems that came back, not as part of
-                        the search itself. If the pair you want is not on this page, add a serial,
+                        the search itself. If the pair you want is not in these results, add a serial,
                         cluster, or hostname.
                         {onlySiteFilterIsUsed
                           ? ' Searching by site alone can miss systems that are further down the result list.'
@@ -5033,7 +5426,7 @@ function App() {
                           </Text>
                         ) : results.pairs.length > 0 ? (
                           <Text size="sm" c="dimmed">
-                            Showing {filteredSearchResults.length} HA pairs
+                            Found {filteredSearchResults.length} HA pairs
                             {showSavedOnly ? ' (saved only)' : ` (${results.totalCount} total)`}
                             {isLoading ? ' — still searching…' : '.'}
                           </Text>
@@ -5045,7 +5438,7 @@ function App() {
                           checked={showSavedOnly}
                           onChange={(event) => {
                             setShowSavedOnly(event.currentTarget.checked)
-                            setSearchPage(1)
+                            setSearchResultsEpoch((current) => current + 1)
                           }}
                         />
                       ) : null}
@@ -5065,73 +5458,65 @@ function App() {
                       />
                     ) : (
                       <>
-                        <Stack gap="md">
-                          {groupPairsByCustomer(paginatedSearchResults).map((group, groupIndex) => (
-                            <div key={groupIndex}>
-                              <CustomerHeader
-                                group={group}
-                                onSaveCustomer={group.customerId ? () => {
-                                  const name = group.customerName || group.customerId!
-                                  setCustomerMappings((current) => ({ ...current, [group.customerId!]: name }))
-                                } : undefined}
-                                customerAlreadySaved={
-                                  group.customerId ? !!customerMappings[group.customerId] : false
-                                }
-                                onSaveNagp={group.nagpId ? () => {
-                                  const name = group.nagpName || group.customerName || group.nagpId!
-                                  setNagpMappings((current) => ({ ...current, [group.nagpId!]: name }))
-                                } : undefined}
-                                nagpAlreadySaved={group.nagpId ? !!nagpMappings[group.nagpId] : false}
-                              />
-                              <Stack gap="xs">
-                                {groupPairsByCluster(group.pairs).map((clusterGroup, clusterIndex) => (
-                                  <ClusterBlock
-                                    key={clusterIndex}
-                                    clusterGroup={clusterGroup}
-                                    onAddCluster={clusterGroup.clusterId
-                                      ? () => void handleSaveCluster(clusterGroup.clusterId!)
-                                      : undefined}
-                                    isAddingCluster={savingClusterId === clusterGroup.clusterId}
-                                    clusterAddDisabled={
-                                      savingClusterId !== null &&
-                                      savingClusterId !== clusterGroup.clusterId
-                                    }
-                                    renderPair={(pair) => {
-                                      const isSaved = savedPairMap.has(pair.key)
-                                      const pairTags = normalizeTags(
-                                        searchResultTags.get(pair.key) ?? savedPairMap.get(pair.key)?.tags ?? [],
-                                        getAutomaticTagsForPair(pair),
-                                      )
-                                      return (
-                                        <HAPairCard
-                                          pair={pair}
-                                          action={() => void handleSavePair(pair, pairTags)}
-                                          actionLabel={isSaved ? 'Update saved pair' : 'Save HA pair'}
-                                          tagsEditor={
-                                            <TagsEditor
-                                              value={pairTags}
-                                              onChange={(value) => setSearchResultTags((curr) => new Map(curr).set(pair.key, value))}
-                                              allTags={allTags}
-                                            />
-                                          }
-                                        />
-                                      )
-                                    }}
+                        <GroupedPairSections
+                          key={searchResultsEpoch}
+                          groups={searchGroups}
+                          totals={searchGroupTotals}
+                          progressive
+                          isLoading={isLoading}
+                          onSaveNagp={(group) => {
+                            if (!group.nagpId) return
+                            const name = group.nagpName || group.nagpId
+                            setNagpMappings((current) => ({ ...current, [group.nagpId!]: name }))
+                          }}
+                          nagpIsSaved={(group) =>
+                            group.nagpId ? !!nagpMappings[group.nagpId] : false
+                          }
+                          onSaveCustomer={(group) => {
+                            if (!group.customerId) return
+                            const name = group.customerName || group.customerId
+                            setCustomerMappings((current) => ({
+                              ...current,
+                              [group.customerId!]: name,
+                            }))
+                          }}
+                          customerIsSaved={(group) =>
+                            group.customerId ? !!customerMappings[group.customerId] : false
+                          }
+                          onAddCluster={(clusterGroup) => {
+                            if (clusterGroup.clusterId) {
+                              void handleSaveCluster(clusterGroup.clusterId)
+                            }
+                          }}
+                          isClusterAdding={(clusterGroup) =>
+                            savingClusterId === clusterGroup.clusterId
+                          }
+                          isClusterAddDisabled={(clusterGroup) =>
+                            savingClusterId !== null && savingClusterId !== clusterGroup.clusterId
+                          }
+                          renderPair={(pair) => {
+                            const isSaved = savedPairMap.has(pair.key)
+                            const pairTags = normalizeTags(
+                              searchResultTags.get(pair.key) ?? savedPairMap.get(pair.key)?.tags ?? [],
+                              getAutomaticTagsForPair(pair),
+                            )
+                            return (
+                              <HAPairCard
+                                pair={pair}
+                                action={() => void handleSavePair(pair, pairTags)}
+                                actionLabel={isSaved ? 'Update saved pair' : 'Save HA pair'}
+                                tagsEditor={
+                                  <TagsEditor
+                                    value={pairTags}
+                                    onChange={(value) => setSearchResultTags((curr) =>
+                                      new Map(curr).set(pair.key, value))}
+                                    allTags={allTags}
                                   />
-                                ))}
-                              </Stack>
-                            </div>
-                          ))}
-                        </Stack>
-                        {totalPages > 1 ? (
-                          <Group justify="center">
-                            <Pagination
-                              total={totalPages}
-                              value={searchPage}
-                              onChange={setSearchPage}
-                            />
-                          </Group>
-                        ) : null}
+                                }
+                              />
+                            )
+                          }}
+                        />
                       </>
                     )}
                       </>
@@ -5190,38 +5575,40 @@ function App() {
                             onAction={() => setSavedSystemsFilter('')}
                           />
                         ) : null}
-                        {groupPairsByCustomer(filteredSavedPairs).map((group, groupIndex) => (
-                          <div key={groupIndex}>
-                            <CustomerHeader group={group} />
-                            <Stack gap="xs">
-                              {groupPairsByCluster(group.pairs).map((clusterGroup, clusterIndex) => (
-                                <ClusterBlock
-                                  key={clusterIndex}
-                                  clusterGroup={clusterGroup}
-                                  renderPair={(pair) => (
-                                    <HAPairCard
-                                      pair={pair}
-                                      action={() => handleRemovePair(pair.key)}
-                                      onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
-                                      isRefreshing={refreshingCapacity.has(pair.key)}
-                                      node1Workloads={pair.node1.systemId ? workloadsData.get(pair.node1.systemId) ?? null : null}
-                                      node2Workloads={pair.node2?.systemId ? workloadsData.get(pair.node2.systemId) ?? null : null}
-                                      node1WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node1.systemId)}
-                                      node2WorkloadsLoading={isNodeWorkloadsLoading(pair.key, pair.node2?.systemId)}
-                                      tagsEditor={
-                                        <TagsEditor
-                                          value={pair.tags}
-                                          onChange={(value) => handleTagsChange(pair.key, value)}
-                                          allTags={allTags}
-                                        />
-                                      }
-                                    />
-                                  )}
-                                />
-                              ))}
-                            </Stack>
-                          </div>
-                        ))}
+                        {filteredSavedPairs.length === 0 ? null : (
+                          <GroupedPairSections
+                            groups={filteredSavedGroups}
+                            renderPair={(pair) => (
+                              <HAPairCard
+                                pair={pair}
+                                action={() => handleRemovePair(pair.key)}
+                                onRefreshCapacity={() => void handleRefreshCapacity(pair.key)}
+                                isRefreshing={refreshingCapacity.has(pair.key)}
+                                node1Workloads={pair.node1.systemId
+                                  ? workloadsData.get(pair.node1.systemId) ?? null
+                                  : null}
+                                node2Workloads={pair.node2?.systemId
+                                  ? workloadsData.get(pair.node2.systemId) ?? null
+                                  : null}
+                                node1WorkloadsLoading={isNodeWorkloadsLoading(
+                                  pair.key,
+                                  pair.node1.systemId,
+                                )}
+                                node2WorkloadsLoading={isNodeWorkloadsLoading(
+                                  pair.key,
+                                  pair.node2?.systemId,
+                                )}
+                                tagsEditor={
+                                  <TagsEditor
+                                    value={pair.tags}
+                                    onChange={(value) => handleTagsChange(pair.key, value)}
+                                    allTags={allTags}
+                                  />
+                                }
+                              />
+                            )}
+                          />
+                        )}
                       </Stack>
                     )}
                   </Stack>
