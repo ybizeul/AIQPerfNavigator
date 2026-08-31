@@ -2994,6 +2994,61 @@ function PairSelectionRow({
   )
 }
 
+const METRICS_VIEWPORT_BOTTOM_GAP = 32
+/* Only a guard against a collapsed grid. Anything taller would overflow short windows
+   and hand the library back to the page scroll this layout exists to avoid. */
+const METRICS_VIEWPORT_MIN_HEIGHT = 120
+
+/* Publishes the room between the top of the metrics workspace and the bottom of the
+   window, which lets the stylesheet give each pane its own full-height scroller. The
+   measurement is taken in document coordinates on purpose: the result must not depend
+   on the page scroll position it is meant to make unnecessary. */
+function useMetricsViewportHeight() {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+
+    let frame = 0
+
+    const measure = () => {
+      frame = 0
+      const rect = element.getBoundingClientRect()
+      if (rect.width === 0 && rect.height === 0) return
+      const documentTop = rect.top + window.scrollY
+      const height = Math.max(
+        METRICS_VIEWPORT_MIN_HEIGHT,
+        Math.round(window.innerHeight - documentTop - METRICS_VIEWPORT_BOTTOM_GAP),
+      )
+      const next = `${height}px`
+      if (element.style.getPropertyValue('--metrics-viewport-height') !== next) {
+        element.style.setProperty('--metrics-viewport-height', next)
+      }
+    }
+
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(measure)
+    }
+
+    schedule()
+    window.addEventListener('resize', schedule)
+    /* Observe the surroundings, never the workspace itself: its height is what this
+       hook writes, so watching it would feed the measurement back into its own input. */
+    const observer = new ResizeObserver(schedule)
+    if (element.parentElement) observer.observe(element.parentElement)
+    observer.observe(document.body)
+
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', schedule)
+      observer.disconnect()
+    }
+  }, [])
+
+  return ref
+}
+
 function MetricsPairLibrary({
   savedCount,
   visiblePairs,
@@ -3059,7 +3114,17 @@ function MetricsPairLibrary({
           leftSection={<IconTag size={12} />}
         />
       </div>
-      <ScrollArea className="metrics-library-scroll" styles={{ scrollbar: { zIndex: 3 } }}>
+      <ScrollArea
+        className="metrics-library-scroll"
+        type="auto"
+        aria-label="Saved HA pairs"
+        styles={{ scrollbar: { zIndex: 3 } }}
+      >
+        {visiblePairs.length === 0 ? (
+          <Text size="xs" c="dimmed" p="sm">
+            No HA pairs match these tags. Clear the filter to see every saved pair.
+          </Text>
+        ) : null}
         {groupPairsByCluster(visiblePairs).map((group, groupIndex) => {
           const clusterPairKeys = group.pairs.map((pair) => pair.key)
           const clusterSelectedCount = clusterPairKeys.filter((key) => selectedPairKeySet.has(key))
@@ -3266,6 +3331,8 @@ function App() {
   const [bootLocation] = useState(parseLocation)
   const [activeTab, setActiveTab] = useState<TabValue>(bootLocation.tab)
   const [metricsView, setMetricsView] = useState<MetricsView>(bootLocation.metricsView)
+  const metricsLayoutRef = useMetricsViewportHeight()
+  const metricsMainRef = useRef<HTMLDivElement>(null)
   const [savedFiltersOpened, { open: openSavedFilters, close: closeSavedFilters }] =
     useDisclosure(bootLocation.openSavedFilters)
   const [unseenVersions] = useState(unseenReleaseVersions)
@@ -3452,6 +3519,9 @@ function App() {
   function handleMetricsViewChange(value: string) {
     const nextView: MetricsView = value === 'capacity' ? 'capacity' : 'graphs'
     setMetricsView(nextView)
+    // Both views share the analysis pane, so a leftover scroll offset would drop the
+    // other view in mid-air.
+    metricsMainRef.current?.scrollTo({ top: 0 })
     window.history.pushState(null, '', buildTabUrl('metrics', nextView))
   }
 
@@ -5183,7 +5253,7 @@ function App() {
                         onAction={() => handleTabChange('search')}
                       />
                     ) : (
-                      <div className="metrics-layout">
+                      <div ref={metricsLayoutRef} className="metrics-layout">
                         <MetricsPairLibrary
                           savedCount={savedPairs.length}
                           visiblePairs={metricsVisiblePairs}
@@ -5196,7 +5266,15 @@ function App() {
                           onApplyKeys={applySelectedPairKeys}
                         />
 
-                        <div className="metrics-main">
+                        <div
+                          ref={metricsMainRef}
+                          className="metrics-main"
+                          tabIndex={0}
+                          role="region"
+                          aria-label={
+                            metricsView === 'graphs' ? 'Performance analysis' : 'Capacity analysis'
+                          }
+                        >
                           {metricsView === 'graphs' ? (
                           <Stack gap="md">
                             <Group gap="md" align="flex-end" wrap="wrap">

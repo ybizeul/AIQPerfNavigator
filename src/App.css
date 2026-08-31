@@ -15,6 +15,9 @@
   }
 }
 
+/* --metrics-viewport-height is measured in App.tsx: the distance from the top of this
+   grid to the bottom of the window. CSS cannot express it because everything above the
+   grid (app header, tabs, tab heading) is content-sized. */
 .metrics-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -27,6 +30,7 @@
   flex-direction: column;
   min-height: 0;
   max-height: 22rem;
+  max-height: min(22rem, var(--metrics-viewport-height, 22rem));
   overflow: hidden;
 }
 
@@ -48,25 +52,43 @@
 .metrics-library-scroll {
   flex: 1;
   min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .metrics-main {
   min-width: 0;
 }
 
+/* Wide enough for two panes: the workspace fills the window and each pane scrolls on
+   its own, so the library never depends on how far the page happens to scroll. */
 @media (min-width: 62em) {
   .metrics-layout {
     grid-template-columns: 260px minmax(0, 1fr);
+    align-items: stretch;
+    height: var(--metrics-viewport-height, calc(100vh - 16rem));
+    height: var(--metrics-viewport-height, calc(100dvh - 16rem));
   }
 
   .metrics-library {
-    position: sticky;
-    top: calc(var(--app-shell-header-offset, 72px) + var(--mantine-spacing-md));
-    max-height: calc(
-      100vh - var(--app-shell-header-offset, 72px) - 2 * var(--mantine-spacing-md)
-    );
-    max-height: calc(
-      100dvh - var(--app-shell-header-offset, 72px) - 2 * var(--mantine-spacing-md)
-    );
+    max-height: none;
+    height: 100%;
+  }
+
+  .metrics-main {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+/* Panes that scroll on screen must fall back to document flow on paper. */
+@media print {
+  .metrics-layout,
+  .metrics-library,
+  .metrics-main {
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 }
