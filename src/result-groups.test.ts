@@ -444,13 +444,14 @@ describe('progressive group reveal', () => {
     customerId: string,
     siteId: string,
     clusterId: string,
+    nagpId = 'n1',
   ) {
     return pair(
       key,
       node({
         serialNumber: key,
         hostName: `${key}-node`,
-        nagp: { id: 'n1', name: 'Parent' },
+        nagp: { id: nagpId, name: `Parent ${nagpId}` },
         customer: { id: customerId, name: `Client ${customerId}` },
         site: { id: siteId, name: `Site ${siteId}`, cmatId: null },
         cluster: { id: clusterId, name: `Cluster ${clusterId}` },
@@ -553,6 +554,27 @@ describe('progressive group reveal', () => {
       units[0]!.customerKey,
       units[2]!.customerKey,
     ]))).toBeNull()
+  })
+
+  test('skips a collapsed NAGP and reveals the next NAGP', () => {
+    const groups = groupPairsForDisplay([
+      revealPair('a', 'c1', 's1', 'cl1'),
+      revealPair('b', 'c1', 's1', 'cl2'),
+      revealPair('c', 'c2', 's2', 'cl3', 'n2'),
+    ])
+    const units = planGroupReveals(groups, 1)
+    const revealed = new Set([units[0]!.key])
+
+    expect(units[0]!.nagpKey).toBe(groups[0]!.key)
+    expect(units[2]!.nagpKey).toBe(groups[1]!.key)
+    expect(nextRevealKey(units, revealed, new Set([units[0]!.nagpKey])))
+      .toBe(units[2]!.key)
+    expect(nextRevealKey(units, revealed, new Set(groups.map((group) => group.key))))
+      .toBeNull()
+
+    const afterSkip = new Set([units[0]!.key, units[2]!.key])
+    expect(nextRevealKey(units, afterSkip, new Set([units[0]!.nagpKey]))).toBeNull()
+    expect(nextRevealKey(units, afterSkip, new Set())).toBe(units[1]!.key)
   })
 
   test('remaps a revealed customer to sites and a revealed site to clusters', () => {

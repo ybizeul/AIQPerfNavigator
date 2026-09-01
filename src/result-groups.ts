@@ -66,6 +66,7 @@ export const REVEAL_UNIT_PAIR_BUDGET = 20
 export type RevealUnit = {
   kind: 'customer' | 'site' | 'cluster'
   key: string
+  nagpKey: string
   customerKey: string
   siteKey: string | null
   pairCount: number
@@ -339,6 +340,7 @@ export function planGroupReveals<T extends GroupingPair>(
         units.push({
           kind: 'customer',
           key: customerKey,
+          nagpKey: nagp.key,
           customerKey,
           siteKey: null,
           pairCount: customerCount,
@@ -353,6 +355,7 @@ export function planGroupReveals<T extends GroupingPair>(
           units.push({
             kind: 'site',
             key: siteKey,
+            nagpKey: nagp.key,
             customerKey,
             siteKey,
             pairCount: siteCount,
@@ -364,6 +367,7 @@ export function planGroupReveals<T extends GroupingPair>(
           units.push({
             kind: 'cluster',
             key: scopedClusterKey(nagp.key, customer.key, site.key, cluster.key),
+            nagpKey: nagp.key,
             customerKey,
             siteKey,
             pairCount: cluster.pairs.length,
@@ -397,6 +401,7 @@ export function nextRevealKey(
   for (const unit of units) {
     if (revealedKeys.has(unit.key)) continue
     const isHidden =
+      collapsedKeys.has(unit.nagpKey) ||
       collapsedKeys.has(unit.customerKey) ||
       (unit.siteKey !== null && collapsedKeys.has(unit.siteKey))
     if (!isHidden) return unit.key

@@ -1873,49 +1873,62 @@ function NagpHeader({
   nagpAlreadySaved,
   pairCount,
   visiblePairCount,
+  opened,
+  onToggle,
+  contentId,
 }: {
   group: NagpGroup
   onSaveNagp?: () => void
   nagpAlreadySaved?: boolean
   pairCount: number
   visiblePairCount: number
+  opened: boolean
+  onToggle: () => void
+  contentId: string
 }) {
+  const heading = scopeHeading(group.nagpName, group.nagpId, 'Unknown NAGP', 'NAGP')
   const pairLabel =
     visiblePairCount < pairCount
       ? `${visiblePairCount} of ${pairCount} HA pairs`
       : `${pairCount} HA pair${pairCount !== 1 ? 's' : ''}`
   return (
-    <Group gap="xs" mb="xs" wrap="nowrap" align="flex-start">
-      <ThemeIcon variant="light" color="violet" size="md">
-        <IconBinaryTree size={16} />
-      </ThemeIcon>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <Group gap={4} wrap="wrap">
-          <Title order={4} fz="md" fw={700} m={0} style={{ minWidth: 0 }}>
-            {scopeHeading(group.nagpName, group.nagpId, 'Unknown NAGP', 'NAGP')}
-          </Title>
-          {onSaveNagp ? (
-            <SaveScopeButton
-              label="NAGP"
-              alreadySaved={!!nagpAlreadySaved}
-              onSave={onSaveNagp}
-              unavailableReason={
-                group.nagpId ? undefined : 'Needs a NAGP ID to save as a filter'
-              }
-            />
-          ) : null}
-        </Group>
-        <Group gap="md">
-          {group.nagpId ? (
-            <Text size="xs" c="dimmed">
-              NAGP ID: {group.nagpId}
+    <Group gap="xs" wrap="wrap" align="flex-start">
+      <div style={{ minWidth: 0, flex: '1 1 12rem' }}>
+        <GroupDisclosure
+          opened={opened}
+          onToggle={onToggle}
+          contentId={contentId}
+        >
+          <ThemeIcon variant="light" color="violet" size="md">
+            <IconBinaryTree size={16} />
+          </ThemeIcon>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Text size="md" fw={700} lineClamp={1} ta="start">
+              {heading}
             </Text>
-          ) : null}
-          <Text size="xs" c="dimmed">
-            {pairLabel}
-          </Text>
-        </Group>
+            <Group gap="md">
+              {group.nagpId ? (
+                <Text size="xs" c="dimmed" fw={400}>
+                  NAGP ID: {group.nagpId}
+                </Text>
+              ) : null}
+              <Text size="xs" c="dimmed" fw={400}>
+                {pairLabel}
+              </Text>
+            </Group>
+          </div>
+        </GroupDisclosure>
       </div>
+      {onSaveNagp ? (
+        <SaveScopeButton
+          label="NAGP"
+          alreadySaved={!!nagpAlreadySaved}
+          onSave={onSaveNagp}
+          unavailableReason={
+            group.nagpId ? undefined : 'Needs a NAGP ID to save as a filter'
+          }
+        />
+      ) : null}
     </Group>
   )
 }
@@ -2168,6 +2181,7 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
       const nextUnit = currentUnits.find((unit) => unit.key === nextKey)
       if (
         ancestorKey &&
+        nextUnit?.nagpKey !== ancestorKey &&
         nextUnit?.customerKey !== ancestorKey &&
         nextUnit?.siteKey !== ancestorKey
       ) {
@@ -2251,6 +2265,8 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
       ) : null}
       {visibleGroups.map((nagpGroup) => {
         const nagpCount = totals?.nagp[nagpGroup.key] ?? nagpPairCount(nagpGroup)
+        const nagpOpen = !collapsedKeys.has(nagpGroup.key)
+        const nagpPanelId = panelDomId('nagp', nagpGroup.key)
         return (
           <Paper
             key={nagpGroup.key}
@@ -2260,13 +2276,18 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
             p={{ base: 'sm', sm: 'md' }}
             className="result-nagp"
           >
+            <Stack gap={4}>
             <NagpHeader
               group={nagpGroup}
               onSaveNagp={onSaveNagp ? () => onSaveNagp(nagpGroup) : undefined}
               nagpAlreadySaved={nagpIsSaved?.(nagpGroup)}
               pairCount={nagpCount}
               visiblePairCount={nagpPairCount(nagpGroup)}
+              opened={nagpOpen}
+              onToggle={() => toggleGroup(nagpGroup.key)}
+              contentId={nagpPanelId}
             />
+            <Collapse expanded={nagpOpen} id={nagpPanelId} keepMounted={false}>
             <Stack gap="sm" className="result-children">
               {nagpGroup.customers.map((customerGroup) => {
                 const customerScoped = scopedCustomerKey(nagpGroup.key, customerGroup.key)
@@ -2292,7 +2313,7 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
                       onToggle={() => toggleGroup(customerScoped)}
                       contentId={customerPanelId}
                     />
-                    <Collapse expanded={customerOpen} id={customerPanelId}>
+                    <Collapse expanded={customerOpen} id={customerPanelId} keepMounted={false}>
                     <Stack gap="sm" className="result-children">
                       {customerGroup.sites.map((siteGroup) => {
                         const siteScoped = scopedSiteKey(
@@ -2340,7 +2361,7 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
                               onToggle={() => toggleGroup(siteScoped)}
                               contentId={sitePanelId}
                             />
-                            <Collapse expanded={siteOpen} id={sitePanelId}>
+                            <Collapse expanded={siteOpen} id={sitePanelId} keepMounted={false}>
                             <Stack gap="xs">
                               {clusterBlocks}
                             </Stack>
@@ -2353,6 +2374,8 @@ function GroupedPairSections<T extends HAPair | SavedHAPair>({
                   </Stack>
                 )
               })}
+            </Stack>
+            </Collapse>
             </Stack>
           </Paper>
         )
@@ -3106,7 +3129,8 @@ function SearchResultsSkeleton() {
     <Stack gap="lg">
       {Array.from({ length: 2 }, (_, groupIndex) => (
         <Paper key={groupIndex} withBorder radius="md" p={{ base: 'sm', sm: 'md' }}>
-          <Group gap="xs" mb="sm">
+          <Group gap="xs" mb="sm" wrap="nowrap">
+            <Skeleton h={16} w={16} circle />
             <Skeleton h={28} w={28} circle />
             <Stack gap={5}>
               <Skeleton h={14} w={160} radius="sm" />
