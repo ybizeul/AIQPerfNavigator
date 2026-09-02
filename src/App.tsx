@@ -57,6 +57,7 @@ import {
   IconCloud,
   IconCopy,
   IconDeviceDesktop,
+  IconDeviceFloppy,
   IconDownload,
   IconFilter,
   IconFilterFilled,
@@ -77,6 +78,17 @@ import {
 } from '@tabler/icons-react'
 import { AreaChartWithLegend } from './AreaChartWithLegend'
 import { CHART_LOADING_LEGEND_HEIGHT } from './chart-legend'
+import {
+  deleteMetricsPreset,
+  deserializeMetricsPresets,
+  findMatchingPreset,
+  findPresetByName,
+  prunePresetToExisting,
+  sortedMetricsPresets,
+  upsertMetricsPreset,
+  withPrunedSelection,
+  type MetricsSelectionPreset,
+} from './metrics-presets'
 import {
   customerPairCount,
   groupPairTotals,
@@ -3473,6 +3485,7 @@ function MetricsPairLibrary({
   metricsTagFilter,
   selectedPairKeys,
   selectedPairKeySet,
+  headerAction,
   onFilterChange,
   onTogglePair,
   onApplyKeys,
@@ -3483,6 +3496,7 @@ function MetricsPairLibrary({
   metricsTagFilter: string[]
   selectedPairKeys: string[]
   selectedPairKeySet: Set<string>
+  headerAction?: ReactNode
   onFilterChange: (value: string[]) => void
   onTogglePair: (key: string) => void
   onApplyKeys: (keys: string[]) => void
@@ -3493,29 +3507,32 @@ function MetricsPairLibrary({
   return (
     <Paper withBorder radius="md" className="metrics-library">
       <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-        <Group align="flex-start" wrap="nowrap" gap="xs">
-          {visiblePairs.length > 0 ? (
-            <Tooltip label="Select all visible HA pairs" withArrow>
-              <Checkbox
-                checked={allVisibleSelected}
-                indeterminate={!allVisibleSelected && selectedVisibleCount > 0}
-                aria-label="All visible HA pairs"
-                onChange={() => {
-                  onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
-                }}
-                styles={{ body: { padding: 6, margin: -6 }, inner: { marginTop: 3 } }}
-              />
-            </Tooltip>
-          ) : null}
-          <div>
-            <Text fw={500} size="sm">HA pairs</Text>
-            <Text size="xs" c="dimmed">
-              {visiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedCount}` : ''} saved
-              {selectedPairKeySet.size > 0
-                ? ` · ${selectedPairKeySet.size} selected for Performance and Capacity`
-                : ''}
-            </Text>
-          </div>
+        <Group align="flex-start" wrap="nowrap" gap="xs" justify="space-between">
+          <Group align="flex-start" wrap="nowrap" gap="xs">
+            {visiblePairs.length > 0 ? (
+              <Tooltip label="Select all visible HA pairs" withArrow>
+                <Checkbox
+                  checked={allVisibleSelected}
+                  indeterminate={!allVisibleSelected && selectedVisibleCount > 0}
+                  aria-label="All visible HA pairs"
+                  onChange={() => {
+                    onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
+                  }}
+                  styles={{ body: { padding: 6, margin: -6 }, inner: { marginTop: 3 } }}
+                />
+              </Tooltip>
+            ) : null}
+            <div>
+              <Text fw={500} size="sm">HA pairs</Text>
+              <Text size="xs" c="dimmed">
+                {visiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedCount}` : ''} saved
+                {selectedPairKeySet.size > 0
+                  ? ` · ${selectedPairKeySet.size} selected for Performance and Capacity`
+                  : ''}
+              </Text>
+            </div>
+          </Group>
+          {headerAction}
         </Group>
         <MultiSelect
           mt="xs"
@@ -3598,6 +3615,205 @@ function MetricsPairLibrary({
         })}
       </ScrollArea>
     </Paper>
+  )
+}
+
+function MetricsPresetsControl({
+  presets,
+  selectedPairKeys,
+  metricsTagFilter,
+  existingPairKeys,
+  existingTags,
+  pairTagsByKey,
+  onSave,
+  onApply,
+  onDelete,
+}: {
+  presets: MetricsSelectionPreset[]
+  selectedPairKeys: string[]
+  metricsTagFilter: string[]
+  existingPairKeys: ReadonlySet<string>
+  existingTags: ReadonlySet<string>
+  pairTagsByKey: ReadonlyMap<string, readonly string[]>
+  onSave: (name: string) => boolean
+  onApply: (preset: MetricsSelectionPreset) => void
+  onDelete: (id: string) => void
+}) {
+  const [menuOpened, setMenuOpened] = useState(false)
+  const [saveOpened, { open: openSave, close: closeSave }] = useDisclosure(false)
+  const [presetPendingDelete, setPresetPendingDelete] = useState<MetricsSelectionPreset | null>(
+    null,
+  )
+  const [draftName, setDraftName] = useState('')
+  const saveDescriptionId = useId()
+  const prunedPresets = useMemo(
+    () =>
+      presets.map((preset) =>
+        withPrunedSelection(preset, existingPairKeys, existingTags, pairTagsByKey),
+      ),
+    [presets, existingPairKeys, existingTags, pairTagsByKey],
+  )
+  const sortedPresets = sortedMetricsPresets(presets)
+  const matching = findMatchingPreset(prunedPresets, selectedPairKeys, metricsTagFilter)
+  const canSave = selectedPairKeys.length > 0
+  const trimmedName = draftName.trim()
+  const replacing = trimmedName ? findPresetByName(presets, trimmedName) : undefined
+
+  const handleOpenSave = () => {
+    setMenuOpened(false)
+    setDraftName(matching?.name ?? '')
+    openSave()
+  }
+
+  const handleSave = () => {
+    if (!onSave(draftName)) return
+    closeSave()
+  }
+
+  return (
+    <>
+      <Menu
+        position="bottom-end"
+        shadow="md"
+        width={280}
+        opened={menuOpened}
+        onChange={setMenuOpened}
+        closeOnItemClick={false}
+      >
+        <Menu.Target>
+          <Tooltip label="Selection presets" withArrow>
+            <ActionIcon
+              variant="default"
+              size="lg"
+              aria-label="Selection presets"
+              aria-haspopup="menu"
+            >
+              <IconBookmark size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Menu.Target>
+        <Menu.Dropdown>
+          <Menu.Label>Saved selections</Menu.Label>
+          <Menu.Item
+            leftSection={<IconDeviceFloppy size={16} />}
+            disabled={!canSave}
+            onClick={handleOpenSave}
+          >
+            Save current selection
+          </Menu.Item>
+          {canSave ? null : (
+            <Menu.Label>Select at least one HA pair to save.</Menu.Label>
+          )}
+          <Menu.Divider />
+          {sortedPresets.length === 0 ? (
+            <Menu.Label>Save a selection to reuse it here.</Menu.Label>
+          ) : (
+            sortedPresets.map((preset) => {
+              const isCurrent = matching?.id === preset.id
+              return (
+                <div key={preset.id} className="metrics-preset-row">
+                  <UnstyledButton
+                    className="metrics-preset-apply"
+                    aria-current={isCurrent ? 'true' : undefined}
+                    onClick={() => {
+                      onApply(preset)
+                      setMenuOpened(false)
+                    }}
+                  >
+                    <IconCheck
+                      size={16}
+                      style={{ opacity: isCurrent ? 1 : 0, flexShrink: 0 }}
+                      aria-hidden
+                    />
+                    <Text size="sm" truncate>
+                      {preset.name}
+                    </Text>
+                  </UnstyledButton>
+                  <ActionIcon
+                    size="lg"
+                    variant="subtle"
+                    color="red"
+                    aria-label={`Delete preset ${preset.name}`}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setMenuOpened(false)
+                      setPresetPendingDelete(preset)
+                    }}
+                  >
+                    <IconTrash size={16} />
+                  </ActionIcon>
+                </div>
+              )
+            })
+          )}
+        </Menu.Dropdown>
+      </Menu>
+      <Modal
+        opened={saveOpened}
+        onClose={closeSave}
+        title="Save selection"
+        centered
+        aria-describedby={saveDescriptionId}
+      >
+        <Stack>
+          <Text size="sm" c="dimmed" id={saveDescriptionId}>
+            Saves the {selectedPairKeys.length} selected HA pair
+            {selectedPairKeys.length === 1 ? '' : 's'}
+            {metricsTagFilter.length > 0 ? ' and the current tag filter' : ''}.
+            {replacing
+              ? ` This updates the existing “${replacing.name}” preset.`
+              : ''}
+          </Text>
+          <TextInput
+            label="Preset name"
+            placeholder="Production west"
+            value={draftName}
+            data-autofocus
+            onChange={(event) => setDraftName(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') handleSave()
+            }}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={closeSave}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={!trimmedName || !canSave}>
+              {replacing ? `Replace “${replacing.name}”` : 'Save preset'}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+      <Modal
+        opened={presetPendingDelete !== null}
+        onClose={() => setPresetPendingDelete(null)}
+        title="Delete preset?"
+        centered
+      >
+        <Stack>
+          <Text size="sm">
+            “{presetPendingDelete?.name}” will be removed. This cannot be undone.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPresetPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              onClick={() => {
+                if (!presetPendingDelete) return
+                onDelete(presetPendingDelete.id)
+                setPresetPendingDelete(null)
+              }}
+            >
+              Delete preset
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </>
   )
 }
 
@@ -3740,6 +3956,13 @@ function App() {
     defaultValue: [],
     getInitialValueInEffect: false,
   })
+  const [metricsPresets, setMetricsPresets] = useLocalStorage<MetricsSelectionPreset[]>({
+    key: 'aiq-system-organizer-metrics-presets',
+    defaultValue: [],
+    getInitialValueInEffect: false,
+    deserialize: deserializeMetricsPresets,
+  })
+  const [metricsPresetNotice, setMetricsPresetNotice] = useState<string | null>(null)
   const [bootLocation] = useState(parseLocation)
   const [activeTab, setActiveTab] = useState<TabValue>(bootLocation.tab)
   const [metricsView, setMetricsView] = useState<MetricsView>(bootLocation.metricsView)
@@ -3978,6 +4201,15 @@ function App() {
         label: getTagLabel(tag),
       })),
     [allTags],
+  )
+  const metricsPresetExistingKeys = useMemo(
+    () => new Set(savedPairs.map((pair) => pair.key)),
+    [savedPairs],
+  )
+  const metricsPresetExistingTags = useMemo(() => new Set(allTags), [allTags])
+  const metricsPresetPairTags = useMemo(
+    () => new Map(savedPairs.map((pair) => [pair.key, pair.tags])),
+    [savedPairs],
   )
   const filteredSavedPairs = useMemo(() => {
     if (!savedSystemsFilter.trim()) {
@@ -4801,6 +5033,48 @@ function App() {
         ? selectedPairKeys.filter((key) => key !== pairKey)
         : [...selectedPairKeys, pairKey],
     )
+  }
+
+  const handleSaveMetricsPreset = (name: string): boolean => {
+    const next = upsertMetricsPreset(metricsPresets, {
+      name,
+      selectedPairKeys,
+      metricsTagFilter,
+    })
+    if (!next) return false
+    setMetricsPresets(next.presets)
+    return true
+  }
+
+  const handleApplyMetricsPreset = (preset: MetricsSelectionPreset) => {
+    // Restore filter and keys together. Do not call handleMetricsTagFilterChange:
+    // that handler clears the selection when the user edits the filter.
+    const next = prunePresetToExisting(
+      preset,
+      metricsPresetExistingKeys,
+      metricsPresetExistingTags,
+      metricsPresetPairTags,
+    )
+    const storedCount = new Set(preset.selectedPairKeys).size
+    const restoredCount = next.selectedPairKeys.length
+    if (restoredCount < storedCount) {
+      const missing = storedCount - restoredCount
+      setMetricsPresetNotice(
+        restoredCount === 0
+          ? `“${preset.name}” has no remaining HA pairs among your saved pairs.`
+          : `Restored “${preset.name}” without ${missing} HA pair${
+              missing === 1 ? '' : 's'
+            } that ${missing === 1 ? 'is' : 'are'} no longer available.`,
+      )
+    } else {
+      setMetricsPresetNotice(null)
+    }
+    setMetricsTagFilter(next.metricsTagFilter)
+    applySelectedPairKeys(next.selectedPairKeys)
+  }
+
+  const handleDeleteMetricsPreset = (id: string) => {
+    setMetricsPresets((current) => deleteMetricsPreset(current, id))
   }
 
   useEffect(() => {
@@ -5658,6 +5932,16 @@ function App() {
                       />
                     </Group>
 
+                    {metricsPresetNotice ? (
+                      <Alert
+                        color="yellow"
+                        withCloseButton
+                        onClose={() => setMetricsPresetNotice(null)}
+                      >
+                        {metricsPresetNotice}
+                      </Alert>
+                    ) : null}
+
                     {savedPairs.length === 0 ? (
                       <SearchEmptyState
                         title="No HA pairs available for Metrics"
@@ -5674,6 +5958,19 @@ function App() {
                           metricsTagFilter={metricsTagFilter}
                           selectedPairKeys={selectedPairKeys}
                           selectedPairKeySet={selectedPairKeySet}
+                          headerAction={
+                            <MetricsPresetsControl
+                              presets={metricsPresets}
+                              selectedPairKeys={selectedPairKeys}
+                              metricsTagFilter={metricsTagFilter}
+                              existingPairKeys={metricsPresetExistingKeys}
+                              existingTags={metricsPresetExistingTags}
+                              pairTagsByKey={metricsPresetPairTags}
+                              onSave={handleSaveMetricsPreset}
+                              onApply={handleApplyMetricsPreset}
+                              onDelete={handleDeleteMetricsPreset}
+                            />
+                          }
                           onFilterChange={handleMetricsTagFilterChange}
                           onTogglePair={handleTogglePairSelection}
                           onApplyKeys={applySelectedPairKeys}

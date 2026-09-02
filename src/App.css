@@ -135,6 +135,33 @@
   background: light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-5));
 }
 
+.metrics-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 4px;
+}
+
+.metrics-preset-apply {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--mantine-radius-sm);
+}
+
+.metrics-preset-apply:hover {
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+}
+
+.metrics-preset-apply:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
 .group-disclosure {
   width: 100%;
   min-height: 44px;
