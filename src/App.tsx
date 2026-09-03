@@ -3485,7 +3485,7 @@ function MetricsPairLibrary({
   metricsTagFilter,
   selectedPairKeys,
   selectedPairKeySet,
-  headerAction,
+  presetsControl,
   onFilterChange,
   onTogglePair,
   onApplyKeys,
@@ -3496,57 +3496,77 @@ function MetricsPairLibrary({
   metricsTagFilter: string[]
   selectedPairKeys: string[]
   selectedPairKeySet: Set<string>
-  headerAction?: ReactNode
+  presetsControl?: ReactNode
   onFilterChange: (value: string[]) => void
   onTogglePair: (key: string) => void
   onApplyKeys: (keys: string[]) => void
 }) {
+  const [tagSearch, setTagSearch] = useState('')
+  const hasTagFilter = metricsTagFilter.length > 0
   const selectedVisibleCount = visiblePairs.filter((pair) => selectedPairKeySet.has(pair.key)).length
   const allVisibleSelected = visiblePairs.length > 0 && selectedVisibleCount === visiblePairs.length
 
   return (
     <Paper withBorder radius="md" className="metrics-library">
       <div style={{ padding: 'var(--mantine-spacing-xs) var(--mantine-spacing-sm)', borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-        <Group align="flex-start" wrap="nowrap" gap="xs" justify="space-between">
-          <Group align="flex-start" wrap="nowrap" gap="xs">
-            {visiblePairs.length > 0 ? (
-              <Tooltip label="Select all visible HA pairs" withArrow>
-                <Checkbox
-                  checked={allVisibleSelected}
-                  indeterminate={!allVisibleSelected && selectedVisibleCount > 0}
-                  aria-label="All visible HA pairs"
-                  onChange={() => {
-                    onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
-                  }}
-                  styles={{ body: { padding: 6, margin: -6 }, inner: { marginTop: 3 } }}
-                />
-              </Tooltip>
-            ) : null}
-            <div>
-              <Text fw={500} size="sm">HA pairs</Text>
-              <Text size="xs" c="dimmed">
-                {visiblePairs.length}{metricsTagFilter.length > 0 ? ` / ${savedCount}` : ''} saved
-                {selectedPairKeySet.size > 0
-                  ? ` · ${selectedPairKeySet.size} selected for Performance and Capacity`
-                  : ''}
-              </Text>
-            </div>
-          </Group>
-          {headerAction}
+        <Group align="flex-start" wrap="nowrap" gap="xs">
+          {visiblePairs.length > 0 ? (
+            <Tooltip label="Select all visible HA pairs" withArrow>
+              <Checkbox
+                checked={allVisibleSelected}
+                indeterminate={!allVisibleSelected && selectedVisibleCount > 0}
+                aria-label="All visible HA pairs"
+                onChange={() => {
+                  onApplyKeys(allVisibleSelected ? [] : visiblePairs.map((pair) => pair.key))
+                }}
+                styles={{ body: { padding: 6, margin: -6 }, inner: { marginTop: 3 } }}
+              />
+            </Tooltip>
+          ) : null}
+          <div>
+            <Text fw={500} size="sm">HA pairs</Text>
+            <Text size="xs" c="dimmed">
+              {visiblePairs.length}{hasTagFilter ? ` / ${savedCount}` : ''} saved
+              {selectedPairKeySet.size > 0
+                ? ` · ${selectedPairKeySet.size} selected for Performance and Capacity`
+                : ''}
+            </Text>
+          </div>
         </Group>
         <MultiSelect
           mt="xs"
-          size="xs"
-          placeholder="Filter by tag"
+          aria-label="Filter HA pairs by tag"
+          placeholder={hasTagFilter ? undefined : 'Filter by tag'}
           data={tagOptions}
           value={metricsTagFilter}
           onChange={onFilterChange}
+          searchValue={tagSearch}
+          onSearchChange={setTagSearch}
           clearable
           searchable
           withAlignedLabels
           nothingFoundMessage="No tags"
-          leftSection={<IconTag size={12} />}
+          leftSection={<IconTag size={16} />}
+          /* A click anywhere on the field opens the dropdown, so the chevron only spends
+             row width. `clear` mode drops it in favour of the clear button, and an
+             explicitly empty right section drops it while there is nothing to clear. */
+          clearSectionMode="clear"
+          rightSection={hasTagFilter ? undefined : null}
+          styles={{
+            /* Mantine reserves room for the clear button twice, once through the input's
+               right-section padding and once through 50px it adds to the pill list. Both
+               together leave no room for a pill beside the search field in this narrow
+               pane, so drop the input's. */
+            input: hasTagFilter ? { paddingInlineEnd: 0 } : undefined,
+            /* The field's 100px minimum would push the pills onto a row of their own, and
+               any minimum at all makes the pills wrap earlier than they have to. An empty
+               field has nothing to show, so let it shrink to whatever the pills leave; it
+               still grows to fill the row when no tag is selected, and claims a row of its
+               own once there is text to read. */
+            inputField: { minWidth: tagSearch ? '6rem' : 0 },
+          }}
         />
+        {presetsControl}
       </div>
       <ScrollArea
         className="metrics-library-scroll"
@@ -3681,16 +3701,17 @@ function MetricsPresetsControl({
         closeOnItemClick={false}
       >
         <Menu.Target>
-          <Tooltip label="Selection presets" withArrow>
-            <ActionIcon
-              variant="default"
-              size="lg"
-              aria-label="Selection presets"
-              aria-haspopup="menu"
-            >
-              <IconBookmark size={16} />
-            </ActionIcon>
-          </Tooltip>
+          <Button
+            mt="xs"
+            variant="default"
+            size="sm"
+            fullWidth
+            leftSection={<IconBookmark size={16} />}
+            rightSection={<IconChevronDown size={14} />}
+            aria-haspopup="menu"
+          >
+            Selection presets
+          </Button>
         </Menu.Target>
         <Menu.Dropdown>
           <Menu.Label>Saved selections</Menu.Label>
@@ -5958,7 +5979,7 @@ function App() {
                           metricsTagFilter={metricsTagFilter}
                           selectedPairKeys={selectedPairKeys}
                           selectedPairKeySet={selectedPairKeySet}
-                          headerAction={
+                          presetsControl={
                             <MetricsPresetsControl
                               presets={metricsPresets}
                               selectedPairKeys={selectedPairKeys}
