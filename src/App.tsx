@@ -363,6 +363,16 @@ const QUERY_BY_HOSTNAME = `
   }
 `
 
+const QUERY_BY_CUSTOMER_GROUP = `
+  query SearchByCustomerGroup($pageSize: Int!, $customerGroup: String, $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
+    systems(pageSize: $pageSize, customerGroup: $customerGroup, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
+      totalCount
+      cursor
+      systems {${SYSTEMS_FIELDS}    }
+    }
+  }
+`
+
 const QUERY_BY_SYSTEM_KEY = `
   query SearchBySystemKey($pageSize: Int!, $systemKey: [SystemKey!], $nagpId: String, $watchlistId: String, $customerId: String, $after: String) {
     systems(pageSize: $pageSize, systemKey: $systemKey, nagpId: $nagpId, watchlistId: $watchlistId, customerId: $customerId, after: $after) {
@@ -411,7 +421,13 @@ type SearchForm = {
   query: string
 }
 
-type SearchQueryType = 'cluster' | 'clusterId' | 'serialNumber' | 'systemId' | 'hostName'
+type SearchQueryType =
+  | 'cluster'
+  | 'clusterId'
+  | 'serialNumber'
+  | 'systemId'
+  | 'hostName'
+  | 'customerGroup'
 
 type Watchlist = {
   id: string
@@ -808,7 +824,7 @@ const WATCHLIST_OPTION_PREFIX = 'watchlist:'
 
 const SEARCH_EMPTY_HINTS: Record<SearchKind, string> = {
   query:
-    'Check the cluster name, serial number, system ID, or hostname, or pick a saved customer instead.',
+    'Check the cluster name, serial number, system ID, hostname, or customer group, or pick a saved customer instead.',
   customer:
     'This customer or NAGP has no systems in Active IQ. Try another one, or search by name.',
   watchlist:
@@ -1011,6 +1027,8 @@ function buildQueryVariables(
     return [QUERY_BY_SYSTEM_KEY, { ...base, systemKey: [{ serialNumber: queryValue }] }]
   } else if (queryType === 'systemId') {
     return [QUERY_BY_SYSTEM_KEY, { ...base, systemKey: [{ systemId: queryValue }] }]
+  } else if (queryType === 'customerGroup') {
+    return [QUERY_BY_CUSTOMER_GROUP, { ...base, customerGroup: queryValue }]
   } else {
     return [QUERY_BY_HOSTNAME, { ...base, hostName: queryValue }]
   }
@@ -1468,6 +1486,7 @@ const PARALLEL_SEARCH_QUERY_TYPES: SearchQueryType[] = [
   'serialNumber',
   'systemId',
   'hostName',
+  'customerGroup',
 ]
 
 const EMPTY_SEARCH_RESULTS: SearchResultState = {
@@ -5583,7 +5602,7 @@ function App() {
                               <Combobox.DropdownTarget>
                                 <PillsInput
                                   label="Search"
-                                  description="Searches cluster name, serial number, system ID, and hostname. Pick a saved customer, NAGP, or watchlist to search that scope, with or without a term."
+                                  description="Searches cluster name, serial number, system ID, hostname, and customer group. Pick a saved customer, NAGP, or watchlist to search that scope, with or without a term."
                                   leftSection={<IconSearch size={16} />}
                                   radius="md"
                                   rightSection={
@@ -5634,7 +5653,7 @@ function App() {
                                       placeholder={
                                         selectedScope
                                           ? 'Narrow within this scope (optional)'
-                                          : 'Cluster, serial, system ID, hostname, or customer'
+                                          : 'Cluster, serial, system ID, hostname, or customer group'
                                       }
                                       ref={searchFieldRef}
                                       value={searchForm.query}
