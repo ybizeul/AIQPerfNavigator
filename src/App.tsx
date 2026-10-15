@@ -77,6 +77,7 @@ import {
   IconX,
 } from '@tabler/icons-react'
 import { AreaChartWithLegend } from './AreaChartWithLegend'
+import { chartDataToCsv, downloadTextFile } from './chart-csv'
 import { CHART_LOADING_LEGEND_HEIGHT } from './chart-legend'
 import {
   deleteMetricsPreset,
@@ -1805,6 +1806,49 @@ function collectSeriesKeys(data: ChartDataPoint[]): string[] {
     }
   }
   return keys
+}
+
+function transformDataKeys(data: ChartDataPoint[]): ChartDataPoint[] {
+  return data.map((point) => {
+    const transformed: ChartDataPoint = {
+      timestamp: point.timestamp,
+      __epochMs: point.__epochMs,
+    }
+    for (const [key, value] of Object.entries(point)) {
+      if (key === 'timestamp' || key === '__epochMs') continue
+
+      const separatorIndex = key.indexOf(' – ')
+      let newKey = key
+      if (separatorIndex !== -1) {
+        const metricPart = key.slice(separatorIndex + 3)
+        const nodePart = key.slice(0, separatorIndex)
+        const humanReadableMetric = metricPart
+          .replace('peak_performance', 'Headroom')
+          .replace('current_utilization', 'CPU Utilization')
+        newKey = `${nodePart} – ${humanReadableMetric}`
+      } else {
+        newKey = key
+          .replace('peak_performance', 'Headroom')
+          .replace('current_utilization', 'CPU Utilization')
+      }
+      transformed[newKey] = value
+    }
+    return transformed
+  })
+}
+
+// Headroom is drawn only while its switch is on, and never when several HA pairs are
+// stacked: that chart keeps CPU utilization alone. Export columns follow the same rule.
+function isVisiblePerformanceSeries(
+  graphName: string,
+  key: string,
+  showHeadroom: boolean,
+  stackedAcrossPairs: boolean,
+): boolean {
+  if (graphName !== 'node_headroom_cpu_utilization') return true
+  if (stackedAcrossPairs) return key.includes('CPU Utilization')
+  if (!showHeadroom && key.includes('Headroom')) return false
+  return true
 }
 
 function SaveScopeButton({
@@ -4453,6 +4497,37 @@ function App() {
     URL.revokeObjectURL(downloadUrl)
   }
 
+  const handleGraphCsvDownload = (graph: PerformanceGraphConfig) => {
+    const datasets: Array<{ data: ChartDataPoint[]; nodeLabel: string }> = []
+    for (const pairKey of selectedPairKeys) {
+      const pair = savedPairMap.get(pairKey)
+      if (!pair) continue
+      const node1Points = performanceData.get(`${pair.node1.serialNumber}::${graph.name}`)
+      if (node1Points && node1Points.length > 0) {
+        datasets.push({
+          data: node1Points,
+          nodeLabel: pair.node1.hostName || pair.node1.serialNumber,
+        })
+      }
+      if (pair.node2) {
+        const node2Points = performanceData.get(`${pair.node2.serialNumber}::${graph.name}`)
+        if (node2Points && node2Points.length > 0) {
+          datasets.push({
+            data: node2Points,
+            nodeLabel: pair.node2.hostName || pair.node2.serialNumber,
+          })
+        }
+      }
+    }
+
+    const points = transformDataKeys(consolidateChartDataPerNode(datasets))
+    const stackedAcrossPairs = stackSeries && selectedPairKeys.length > 1
+    const seriesKeys = collectSeriesKeys(points).filter((key) =>
+      isVisiblePerformanceSeries(graph.name, key, showHeadroom, stackedAcrossPairs),
+    )
+    downloadTextFile(`${graph.label}.csv`, chartDataToCsv(points, seriesKeys))
+  }
+
   const handleBrowserDataImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0]
     event.currentTarget.value = ''
@@ -6142,6 +6217,20 @@ function App() {
                                           : false)
                                       )
                                     })
+                                    const stackedAcrossPairs = stackSeries && !isSinglePair
+                                    const hasRows = selectedPairKeys.some((pairKey) => {
+                                      const pair = savedPairMap.get(pairKey)
+                                      if (!pair) return false
+                                      const node1Rows = performanceData.get(
+                                        `${pair.node1.serialNumber}::${graph.name}`,
+                                      )
+                                      if (node1Rows && node1Rows.length > 0) return true
+                                      if (!pair.node2) return false
+                                      const node2Rows = performanceData.get(
+                                        `${pair.node2.serialNumber}::${graph.name}`,
+                                      )
+                                      return Boolean(node2Rows && node2Rows.length > 0)
+                                    })
 
                                     const CHART_COLORS = [
                                       'blue.6',
@@ -6154,43 +6243,16 @@ function App() {
                                       'indigo.6',
                                     ]
 
-                                    // Transform data keys to human-readable labels
-                                    const transformDataKeys = (data: ChartDataPoint[]): ChartDataPoint[] => {
-                                      return data.map((point) => {
-                                        const transformed: ChartDataPoint = { timestamp: point.timestamp, __epochMs: point.__epochMs }
-                                        for (const [key, value] of Object.entries(point)) {
-                                          if (key === 'timestamp' || key === '__epochMs') continue
-                                          
-                                          const separatorIndex = key.indexOf(' – ')
-                                          let newKey = key
-                                          if (separatorIndex !== -1) {
-                                            const metricPart = key.slice(separatorIndex + 3)
-                                            const nodePart = key.slice(0, separatorIndex)
-                                            const humanReadableMetric = metricPart
-                                              .replace('peak_performance', 'Headroom')
-                                              .replace('current_utilization', 'CPU Utilization')
-                                            newKey = `${nodePart} – ${humanReadableMetric}`
-                                          } else {
-                                            newKey = key
-                                              .replace('peak_performance', 'Headroom')
-                                              .replace('current_utilization', 'CPU Utilization')
-                                          }
-                                          transformed[newKey] = value
-                                        }
-                                        return transformed
-                                      })
-                                    }
-
                                     const buildSeries = (data: ChartDataPoint[]) => {
                                       const keys = collectSeriesKeys(data)
-                                      
-                                      // Filter out Headroom when showHeadroom is false for CPU graph
-                                      const filteredKeys = keys.filter((key) => {
-                                        if (graph.name === 'node_headroom_cpu_utilization' && !showHeadroom && key.includes('Headroom')) {
-                                          return false
-                                        }
-                                        return true
-                                      })
+                                      const filteredKeys = keys.filter((key) =>
+                                        isVisiblePerformanceSeries(
+                                          graph.name,
+                                          key,
+                                          showHeadroom,
+                                          stackedAcrossPairs,
+                                        ),
+                                      )
                                       
                                       // Build a map of node prefix -> color index
                                       const nodeColors = new Map<string, number>()
@@ -6223,7 +6285,6 @@ function App() {
                                       })
                                     }
 
-                                    // Transform data keys to human-readable labels
                                     const node1Data = rawNode1Data ? transformDataKeys(rawNode1Data) : null
                                     const node2Data = rawNode2Data ? transformDataKeys(rawNode2Data) : null
                                     const chartData = rawChartData ? transformDataKeys(rawChartData) : null
@@ -6238,20 +6299,38 @@ function App() {
                                                 {graph.description}
                                               </Text>
                                             </div>
-                                            {graph.name === 'node_headroom_cpu_utilization' ? (
-                                              <Tooltip
-                                                label="Unstack series to compare headroom against CPU utilization."
-                                                disabled={!(stackSeries && !isSinglePair)}
-                                              >
-                                                <Switch
-                                                  label="Show headroom"
-                                                  checked={showHeadroom}
-                                                  onChange={(event) => setShowHeadroom(event.currentTarget.checked)}
-                                                  size="sm"
-                                                  disabled={stackSeries && !isSinglePair}
-                                                />
+                                            <Group gap="sm" wrap="nowrap" align="center">
+                                              {graph.name === 'node_headroom_cpu_utilization' ? (
+                                                <Tooltip
+                                                  label="Unstack series to compare headroom against CPU utilization."
+                                                  disabled={!(stackSeries && !isSinglePair)}
+                                                >
+                                                  <Switch
+                                                    label="Show headroom"
+                                                    checked={showHeadroom}
+                                                    onChange={(event) =>
+                                                      setShowHeadroom(event.currentTarget.checked)
+                                                    }
+                                                    size="sm"
+                                                    disabled={stackSeries && !isSinglePair}
+                                                  />
+                                                </Tooltip>
+                                              ) : null}
+                                              <Tooltip label="Download CSV">
+                                                <span style={{ display: 'inline-flex' }}>
+                                                  <ActionIcon
+                                                    variant="subtle"
+                                                    color="gray"
+                                                    size="sm"
+                                                    aria-label={`Download ${graph.label} as CSV`}
+                                                    disabled={isLoading || !hasRows}
+                                                    onClick={() => handleGraphCsvDownload(graph)}
+                                                  >
+                                                    <IconDownload size={16} />
+                                                  </ActionIcon>
+                                                </span>
                                               </Tooltip>
-                                            ) : null}
+                                            </Group>
                                           </Group>
 
                                           {isSinglePair ? (
@@ -6321,13 +6400,14 @@ function App() {
                                                 strokeWidth={1}
                                                 withGradient={false}
                                                 series={(() => {
-                                                  const keys = collectSeriesKeys(chartData).filter((key) => {
-                                                    // When stacking, only show CPU Utilization metrics
-                                                    if (!key.includes('CPU Utilization')) {
-                                                      return false
-                                                    }
-                                                    return true
-                                                  })
+                                                  const keys = collectSeriesKeys(chartData).filter((key) =>
+                                                    isVisiblePerformanceSeries(
+                                                      graph.name,
+                                                      key,
+                                                      showHeadroom,
+                                                      stackedAcrossPairs,
+                                                    ),
+                                                  )
                                                   const isPerNode = keys.some((key) => key.includes(' – '))
                                                   if (isPerNode) {
                                                     const NODE_COLOR_FAMILIES = [
@@ -6373,13 +6453,14 @@ function App() {
                                                 withGradient={false}
                                                 type={isGraphStacked || (stackSeries && graph.name === 'node_avg_iops') ? 'stacked' : undefined}
                                                 series={(() => {
-                                                  const keys = collectSeriesKeys(chartData).filter((key) => {
-                                                    // Filter out Headroom when showHeadroom is false for CPU graph
-                                                    if (graph.name === 'node_headroom_cpu_utilization' && !showHeadroom && key.includes('Headroom')) {
-                                                      return false
-                                                    }
-                                                    return true
-                                                  })
+                                                  const keys = collectSeriesKeys(chartData).filter((key) =>
+                                                    isVisiblePerformanceSeries(
+                                                      graph.name,
+                                                      key,
+                                                      showHeadroom,
+                                                      stackedAcrossPairs,
+                                                    ),
+                                                  )
                                                   const isPerNode = keys.some((key) => key.includes(' – '))
                                                   if (isPerNode) {
                                                     const NODE_COLOR_FAMILIES = [
