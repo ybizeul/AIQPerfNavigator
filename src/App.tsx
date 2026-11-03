@@ -1,4 +1,13 @@
-import { Fragment, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { DateTimePicker } from '@mantine/dates'
 import './App.css'
 import {
@@ -113,6 +122,19 @@ import {
   type NagpGroup,
   type SiteGroup,
 } from './result-groups'
+import {
+  compareTags,
+  deserializeTagFilter,
+  getAutomaticTagsForModel,
+  getReservedTagHint,
+  getTagLabel,
+  isAutomaticTag,
+  isReservedCustomTag,
+  METROCLUSTER_TAG,
+  normalizeTag,
+  normalizeTags,
+  uniqueNormalizedTags,
+} from './tags'
 import { BUILD_INFO, rememberCurrentVersion, unseenReleaseVersions } from './version'
 
 const API_URL = 'https://gql.aiq.netapp.com/graphql'
@@ -716,16 +738,7 @@ const BUCKET_AGGREGATION: Record<string, 'average' | 'min' | 'max'> = {
   node_latency: 'max',
 }
 
-const AUTOMATIC_TAG_PREFIX = '_'
 const CREATE_TAG_OPTION = '$create-tag'
-const METROCLUSTER_TAG = '_metrocluster'
-const RESERVED_TAG_LABELS = ['aff', 'fas', 'cvo', 'metrocluster'] as const
-const RESERVED_TAG_LABEL_SET = new Set<string>(RESERVED_TAG_LABELS)
-const AUTOMATIC_MODEL_TAGS = [
-  { modelPrefix: 'aff', tag: '_aff' },
-  { modelPrefix: 'fas', tag: '_fas' },
-  { modelPrefix: 'cdvm', tag: '_cvo' },
-] as const
 
 // Vibrant colors for tag pills
 const TAG_COLORS = [
@@ -750,65 +763,6 @@ function getTagColor(tag: string): string {
     hash = tag.charCodeAt(i) + ((hash << 5) - hash)
   }
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length]
-}
-
-function isAutomaticTag(tag: string) {
-  return tag.startsWith(AUTOMATIC_TAG_PREFIX)
-}
-
-function getTagLabel(tag: string) {
-  return isAutomaticTag(tag) ? tag.slice(AUTOMATIC_TAG_PREFIX.length) : tag
-}
-
-function getReservedTagKey(tag: string) {
-  let result = tag.trim()
-  while (result.startsWith(AUTOMATIC_TAG_PREFIX)) {
-    result = result.slice(AUTOMATIC_TAG_PREFIX.length)
-  }
-  return result.toLowerCase()
-}
-
-function isReservedCustomTag(tag: string) {
-  const trimmed = tag.trim()
-  if (trimmed.length === 0) {
-    return false
-  }
-  return trimmed.startsWith(AUTOMATIC_TAG_PREFIX) || RESERVED_TAG_LABEL_SET.has(getReservedTagKey(trimmed))
-}
-
-function getReservedTagHint(tag: string) {
-  const trimmed = tag.trim()
-  if (trimmed.startsWith(AUTOMATIC_TAG_PREFIX)) {
-    return 'Names starting with "_" are reserved for automatic tags. Try a name without an underscore.'
-  }
-  return `"${getReservedTagKey(trimmed)}" is reserved for automatic tags. Try a different name.`
-}
-
-function compareTags(left: string, right: string) {
-  const labelComparison = getTagLabel(left).localeCompare(getTagLabel(right), undefined, {
-    sensitivity: 'base',
-  })
-  if (labelComparison !== 0) {
-    return labelComparison
-  }
-  return left.localeCompare(right, undefined, { sensitivity: 'base' })
-}
-
-function getAutomaticTagsForModel(modelName: string | null | undefined): string[] {
-  const normalizedModelName = modelName?.trim().toLowerCase() ?? ''
-  const matchingTag = AUTOMATIC_MODEL_TAGS.find(({ modelPrefix }) =>
-    normalizedModelName.startsWith(modelPrefix),
-  )
-  return matchingTag ? [matchingTag.tag] : []
-}
-
-function normalizeTags(tags: string[], automaticTags: string[] = []) {
-  return Array.from(
-    new Set([
-      ...tags.map((tag) => tag.trim()).filter((tag) => tag.length > 0 && !isReservedCustomTag(tag)),
-      ...automaticTags.map((tag) => tag.trim()).filter((tag) => tag.length > 0),
-    ]),
-  ).sort(compareTags)
 }
 
 const emptySearchForm: SearchForm = {
@@ -2522,7 +2476,7 @@ function TagsEditor({
   }
 
   const handleAddTag = (rawTag: string) => {
-    const tag = rawTag.trim()
+    const tag = normalizeTag(rawTag)
     if (tag.length === 0) {
       return
     }
@@ -2531,7 +2485,7 @@ function TagsEditor({
       return
     }
     setSearch('')
-    if (!manualTags.includes(tag)) {
+    if (!manualTags.some((item) => normalizeTag(item) === tag)) {
       applyManualTags([...manualTags, tag])
     }
   }
@@ -2577,7 +2531,9 @@ function TagsEditor({
 
   const normalizedSearch = search.trim().toLowerCase()
   const options = availableTags.filter(
-    (tag) => !manualTags.includes(tag) && tag.toLowerCase().includes(normalizedSearch),
+    (tag) =>
+      !manualTags.some((item) => normalizeTag(item) === normalizeTag(tag)) &&
+      tag.toLowerCase().includes(normalizedSearch),
   )
   const canCreate =
     search.trim().length > 0 &&
@@ -2673,7 +2629,7 @@ function TagsEditor({
             ))}
             {canCreate ? (
               <Combobox.Option value={CREATE_TAG_OPTION}>
-                Create &quot;{search.trim()}&quot;
+                Create &quot;{normalizeTag(search)}&quot;
               </Combobox.Option>
             ) : null}
             {options.length === 0 && !canCreate && !reservedHint ? (
@@ -4034,6 +3990,7 @@ function App() {
     key: 'aiq-system-organizer-metrics-tag-filter',
     defaultValue: [],
     getInitialValueInEffect: false,
+    deserialize: deserializeTagFilter,
   })
   const [selectedPairKeys, setSelectedPairKeys] = useLocalStorage<string[]>({
     key: 'aiq-system-organizer-metrics-selected-pairs',
@@ -4244,7 +4201,7 @@ function App() {
     window.history.pushState(null, '', buildTabUrl('metrics', nextView))
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const normalizedPairs = savedPairs.map((pair) => {
       const normalizedTags = normalizeTags(pair.tags, getAutomaticTagsForPair(pair))
       return normalizedTags.length === pair.tags.length &&
@@ -4274,7 +4231,12 @@ function App() {
   const allTags = useMemo(
     () =>
       Array.from(
-        new Set(savedPairs.flatMap((pair) => pair.tags).map((tag) => tag.trim()).filter(Boolean)),
+        new Set(
+          savedPairs
+            .flatMap((pair) => pair.tags)
+            .map(normalizeTag)
+            .filter((tag) => tag.length > 0),
+        ),
       ).sort(compareTags),
     [savedPairs],
   )
@@ -4332,7 +4294,9 @@ function App() {
   const metricsVisiblePairs = useMemo(() => {
     if (metricsTagFilter.length === 0) return sortedSavedPairs
     return sortedSavedPairs.filter((pair) =>
-      metricsTagFilter.every((tag) => pair.tags.includes(tag)),
+      metricsTagFilter.every((selected) =>
+        pair.tags.some((tag) => normalizeTag(tag) === normalizeTag(selected)),
+      ),
     )
   }, [sortedSavedPairs, metricsTagFilter])
 
@@ -4904,7 +4868,7 @@ function App() {
   }
 
   const handleMetricsTagFilterChange = (value: string[]) => {
-    setMetricsTagFilter(value)
+    setMetricsTagFilter(uniqueNormalizedTags(value))
     setSelectedPairKeys([])
     setPerformanceData(new Map())
   }

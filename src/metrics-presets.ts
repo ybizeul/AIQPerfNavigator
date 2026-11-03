@@ -1,3 +1,5 @@
+import { normalizeTag, uniqueNormalizedTags } from './tags'
+
 export type MetricsSelectionPreset = {
   id: string
   name: string
@@ -48,7 +50,7 @@ export function parseMetricsPresets(value: unknown): MetricsSelectionPreset[] {
       id: record.id,
       name,
       selectedPairKeys,
-      metricsTagFilter: parseStringArray(record.metricsTagFilter),
+      metricsTagFilter: uniqueNormalizedTags(parseStringArray(record.metricsTagFilter)),
     })
   }
   return presets
@@ -78,7 +80,10 @@ export function findMatchingPreset(
   return presets.find(
     (preset) =>
       sameStringSet(preset.selectedPairKeys, selectedPairKeys) &&
-      sameStringSet(preset.metricsTagFilter, metricsTagFilter),
+      sameStringSet(
+        uniqueNormalizedTags(preset.metricsTagFilter),
+        uniqueNormalizedTags(metricsTagFilter),
+      ),
   )
 }
 
@@ -97,14 +102,22 @@ export function prunePresetToExisting(
   existingTags: ReadonlySet<string>,
   pairTagsByKey: ReadonlyMap<string, readonly string[]>,
 ): Pick<MetricsSelectionPreset, 'selectedPairKeys' | 'metricsTagFilter'> {
-  const metricsTagFilter = preset.metricsTagFilter.filter((tag) => existingTags.has(tag))
+  const normalizedExistingTags = new Set(
+    [...existingTags].map((tag) => normalizeTag(tag)).filter((tag) => tag.length > 0),
+  )
+  const metricsTagFilter = uniqueNormalizedTags(preset.metricsTagFilter).filter((tag) =>
+    normalizedExistingTags.has(tag),
+  )
   return {
     metricsTagFilter,
     selectedPairKeys: preset.selectedPairKeys.filter((key) => {
       if (!existingPairKeys.has(key)) return false
       if (metricsTagFilter.length === 0) return true
       const tags = pairTagsByKey.get(key)
-      return !!tags && metricsTagFilter.every((tag) => tags.includes(tag))
+      return (
+        !!tags &&
+        metricsTagFilter.every((tag) => tags.some((pairTag) => normalizeTag(pairTag) === tag))
+      )
     }),
   }
 }
@@ -139,7 +152,7 @@ export function upsertMetricsPreset(
     id: existing?.id ?? createId(),
     name: existing?.name ?? name,
     selectedPairKeys,
-    metricsTagFilter: [...new Set(input.metricsTagFilter)],
+    metricsTagFilter: uniqueNormalizedTags(input.metricsTagFilter),
   }
 
   const existingIndex = presets.findIndex((entry) => entry.id === preset.id)

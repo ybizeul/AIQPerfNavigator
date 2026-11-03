@@ -53,7 +53,7 @@ describe('upsertMetricsPreset', () => {
       {
         name: '  Prod  ',
         selectedPairKeys: ['b::a', 'b::a'],
-        metricsTagFilter: ['gold', 'gold'],
+        metricsTagFilter: ['Gold', ' gold ', 'GOLD'],
       },
       () => 'id-1',
     )
@@ -107,6 +107,7 @@ describe('findMatchingPreset', () => {
     expect(
       findMatchingPreset(presets, ['c::d', 'a::b'], ['gold'])?.id,
     ).toBe('one')
+    expect(findMatchingPreset(presets, ['a::b', 'c::d'], ['GOLD'])?.id).toBe('one')
     expect(findMatchingPreset(presets, ['a::b', 'c::d'], [])).toBeUndefined()
   })
 
@@ -133,6 +134,24 @@ describe('findPresetByName', () => {
 })
 
 describe('prunePresetToExisting', () => {
+  test('treats tag case variants as the same tag', () => {
+    const pruned = prunePresetToExisting(
+      preset({
+        id: 'one',
+        name: 'One',
+        selectedPairKeys: ['keep'],
+        metricsTagFilter: ['Gold', ' gold '],
+      }),
+      new Set(['keep']),
+      new Set(['GOLD']),
+      new Map([['keep', ['gold']]]),
+    )
+    expect(pruned).toEqual({
+      selectedPairKeys: ['keep'],
+      metricsTagFilter: ['gold'],
+    })
+  })
+
   test('drops pair keys and tags that no longer exist', () => {
     const pruned = prunePresetToExisting(
       preset({
@@ -230,7 +249,7 @@ describe('parseMetricsPresets', () => {
           id: 'one',
           name: ' Prod ',
           selectedPairKeys: ['a::b', 'a::b', 12],
-          metricsTagFilter: ['gold'],
+          metricsTagFilter: ['Gold', ' gold ', 'silver'],
           extra: { __proto__: { polluted: true } },
         },
         { id: 2, name: 'nope', selectedPairKeys: ['a::b'] },
@@ -243,7 +262,7 @@ describe('parseMetricsPresets', () => {
         id: 'one',
         name: 'Prod',
         selectedPairKeys: ['a::b'],
-        metricsTagFilter: ['gold'],
+        metricsTagFilter: ['gold', 'silver'],
       },
     ])
   })
