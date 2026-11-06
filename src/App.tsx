@@ -1,6 +1,7 @@
 import {
   Fragment,
   type ReactNode,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -11,6 +12,7 @@ import {
 import { DateTimePicker } from '@mantine/dates'
 import './App.css'
 import {
+  Accordion,
   ActionIcon,
   Alert,
   Anchor,
@@ -25,6 +27,7 @@ import {
   Divider,
   Drawer,
   Group,
+  Indicator,
   Loader,
   Menu,
   Modal,
@@ -68,6 +71,7 @@ import {
   IconDeviceDesktop,
   IconDeviceFloppy,
   IconDownload,
+  IconEye,
   IconFilter,
   IconFilterFilled,
   IconKey,
@@ -226,7 +230,7 @@ function isBrowserDataExport(value: unknown): value is BrowserDataExport {
   )
 }
 
-const TAB_VALUES = ['search', 'saved', 'metrics'] as const
+const TAB_VALUES = ['search', 'saved', 'metrics', 'watchlists'] as const
 type TabValue = (typeof TAB_VALUES)[number]
 type MetricsView = 'graphs' | 'capacity'
 const DEFAULT_TAB: TabValue = 'search'
@@ -468,14 +472,84 @@ type WatchlistListResponse = {
   }
 }
 
-type WatchlistActionResponse = {
-  results?: {
-    customer_details?: Array<{
-      customer_id?: string
-      customer_name?: string
-    }>
-  }
+type WatchlistItem = {
+  id: string
+  name: string
 }
+
+type WatchlistCategoryKey =
+  | 'customers'
+  | 'sites'
+  | 'groups'
+  | 'clusters'
+  | 'systems'
+  | 'partners'
+  | 'salesreps'
+
+type WatchlistDetail = {
+  id: string
+  name: string
+  owner: string
+  sharedStatus: string
+} & Record<WatchlistCategoryKey, WatchlistItem[]>
+
+type WatchlistRequestBody = Record<string, unknown>
+
+// Field names differ per category in the Active IQ Watchlist v2 API (e.g. systems key off
+// sys_serial_no/system_id, clusters off cluster_identifier/cluster_name). This table drives
+// parsing, request-body building, and rendering from one place instead of seven near-identical
+// code paths.
+const WATCHLIST_CATEGORIES: ReadonlyArray<{
+  key: WatchlistCategoryKey
+  label: string
+  idField: string
+  nameField: string
+  bodyKey: string
+}> = [
+  {
+    key: 'customers',
+    label: 'Customers',
+    idField: 'customer_id',
+    nameField: 'customer_name',
+    bodyKey: 'customer_details',
+  },
+  { key: 'sites', label: 'Sites', idField: 'site_id', nameField: 'site_name', bodyKey: 'site_details' },
+  {
+    key: 'groups',
+    label: 'Groups',
+    idField: 'group_id',
+    nameField: 'group_name',
+    bodyKey: 'group_details',
+  },
+  {
+    key: 'clusters',
+    label: 'Clusters',
+    idField: 'cluster_identifier',
+    nameField: 'cluster_name',
+    bodyKey: 'cluster_details',
+  },
+  {
+    key: 'systems',
+    label: 'Systems',
+    idField: 'sys_serial_no',
+    nameField: 'system_id',
+    bodyKey: 'system_list',
+  },
+  {
+    key: 'partners',
+    label: 'Partners',
+    idField: 'partner_id',
+    nameField: 'partner_name',
+    bodyKey: 'partner_details',
+  },
+  {
+    key: 'salesreps',
+    label: 'Sales reps',
+    idField: 'salesrep_id',
+    nameField: 'salesrep_name',
+    bodyKey: 'salesrep_details',
+  },
+]
 
 type SearchScope = {
   nagpId: string
@@ -1097,14 +1171,21 @@ function parseWatchlists(payload: unknown): Watchlist[] {
   return Array.from(new Map(watchlists.map((watchlist) => [watchlist.id, watchlist])).values())
 }
 
-async function fetchWatchlistApi(url: string, token: string): Promise<unknown> {
+async function fetchWatchlistApi(
+  url: string,
+  token: string,
+  options?: { method?: string; body?: unknown },
+): Promise<unknown> {
   let response: Response
   try {
     response = await fetch(url, {
+      method: options?.method ?? 'GET',
       headers: {
         Accept: 'application/json',
         AuthorizationToken: token,
+        ...(options?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(options?.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     })
   } catch {
     throw new Error(ACTIVE_IQ_UNREACHABLE_MESSAGE)
@@ -1114,31 +1195,103 @@ async function fetchWatchlistApi(url: string, token: string): Promise<unknown> {
     throw new Error(messageForHttpStatus(response.status))
   }
 
-  return response.json()
+  // DELETE and some updates return an empty body.
+  const text = await response.text()
+  return text ? JSON.parse(text) : null
 }
 
 async function fetchWatchlists(token: string): Promise<Watchlist[]> {
   return parseWatchlists(await fetchWatchlistApi(WATCHLIST_API_URL, token))
 }
 
-function parseWatchlistCustomerIds(payload: unknown): string[] {
-  const customers = (payload as WatchlistActionResponse | null)?.results?.customer_details
-  if (!Array.isArray(customers)) return []
+// The API Catalog's auto-generated spec is internally inconsistent about response wrapping
+// (the list endpoint wraps results in `results`, the view endpoint's documented example does
+// not, despite this app's pre-existing watchlist-scoped-search code already assuming it does).
+// Tolerate both shapes rather than trusting either unverified claim.
+function unwrapWatchlistResults(payload: unknown): Record<string, unknown> {
+  if (!payload || typeof payload !== 'object') return {}
+  const record = payload as Record<string, unknown>
+  const results = record.results
+  return results && typeof results === 'object' ? (results as Record<string, unknown>) : record
+}
 
-  return Array.from(
-    new Set(
-      customers.flatMap((item) =>
-        typeof item?.customer_id === 'string' && item.customer_id.trim()
-          ? [item.customer_id.trim()]
-          : [],
-      ),
-    ),
-  )
+function parseWatchlistDetail(payload: unknown, fallbackId: string): WatchlistDetail {
+  const root = unwrapWatchlistResults(payload)
+
+  const detail = {
+    id: typeof root.watchlist_id === 'string' ? root.watchlist_id : fallbackId,
+    name: typeof root.watchlist_name === 'string' ? root.watchlist_name : '',
+    owner: typeof root.owner === 'string' ? root.owner : '',
+    sharedStatus: typeof root.shared_status === 'string' ? root.shared_status : '',
+  } as WatchlistDetail
+
+  for (const category of WATCHLIST_CATEGORIES) {
+    const list = root[category.bodyKey]
+    detail[category.key] = Array.isArray(list)
+      ? list.flatMap((item): WatchlistItem[] => {
+          if (!item || typeof item !== 'object') return []
+          const record = item as Record<string, unknown>
+          const id = record[category.idField]
+          if (typeof id !== 'string' || !id.trim()) return []
+          const name = record[category.nameField]
+          const trimmedId = id.trim()
+          return [
+            { id: trimmedId, name: typeof name === 'string' && name.trim() ? name.trim() : trimmedId },
+          ]
+        })
+      : []
+  }
+
+  return detail
+}
+
+async function fetchWatchlistDetail(token: string, watchlistId: string): Promise<WatchlistDetail> {
+  const url = `${WATCHLIST_ACTION_API_URL}?id=${encodeURIComponent(watchlistId)}`
+  return parseWatchlistDetail(await fetchWatchlistApi(url, token), watchlistId)
 }
 
 async function fetchWatchlistCustomerIds(token: string, watchlistId: string): Promise<string[]> {
+  const detail = await fetchWatchlistDetail(token, watchlistId)
+  return detail.customers.map((item) => item.id)
+}
+
+function buildWatchlistRequestBody(detail: WatchlistDetail): WatchlistRequestBody {
+  const body: WatchlistRequestBody = { watchlist_name: detail.name }
+  for (const category of WATCHLIST_CATEGORIES) {
+    body[category.bodyKey] = detail[category.key].map((item) => ({
+      [category.idField]: item.id,
+      [category.nameField]: item.name,
+    }))
+  }
+  return body
+}
+
+async function createWatchlist(
+  token: string,
+  body: WatchlistRequestBody,
+): Promise<{ id: string; name: string }> {
+  const payload = await fetchWatchlistApi(WATCHLIST_ACTION_API_URL, token, { method: 'POST', body })
+  const root = unwrapWatchlistResults(payload)
+  const id = typeof root.watchlist_id === 'string' ? root.watchlist_id : ''
+  const name = typeof root.watchlist_name === 'string' ? root.watchlist_name : ''
+  if (!id) {
+    throw new Error('Active IQ did not return a watchlist ID.')
+  }
+  return { id, name }
+}
+
+async function updateWatchlist(
+  token: string,
+  watchlistId: string,
+  body: WatchlistRequestBody,
+): Promise<void> {
   const url = `${WATCHLIST_ACTION_API_URL}?id=${encodeURIComponent(watchlistId)}`
-  return parseWatchlistCustomerIds(await fetchWatchlistApi(url, token))
+  await fetchWatchlistApi(url, token, { method: 'PUT', body })
+}
+
+async function deleteWatchlistApi(token: string, watchlistId: string): Promise<void> {
+  const url = `${WATCHLIST_ACTION_API_URL}?id=${encodeURIComponent(watchlistId)}`
+  await fetchWatchlistApi(url, token, { method: 'DELETE' })
 }
 
 async function resolveSearchScopes(
@@ -4031,6 +4184,20 @@ function App() {
   const [watchlists, setWatchlists] = useState<Watchlist[]>([])
   const [watchlistsError, setWatchlistsError] = useState<string | null>(null)
   const [isWatchlistsLoading, setIsWatchlistsLoading] = useState(() => Boolean(refreshToken))
+  const [selectedWatchlistId, setSelectedWatchlistId] = useState<string | null>(null)
+  const [watchlistDetail, setWatchlistDetail] = useState<WatchlistDetail | null>(null)
+  const [isWatchlistDetailLoading, setIsWatchlistDetailLoading] = useState(false)
+  const [watchlistDetailError, setWatchlistDetailError] = useState<string | null>(null)
+  const [watchlistItemsFilter, setWatchlistItemsFilter] = useState('')
+  const [newWatchlistName, setNewWatchlistName] = useState('')
+  const [isCreatingWatchlist, setIsCreatingWatchlist] = useState(false)
+  const [watchlistMutationError, setWatchlistMutationError] = useState<string | null>(null)
+  const [pendingWatchlistDelete, setPendingWatchlistDelete] = useState<Watchlist | null>(null)
+  const [newItemCategory, setNewItemCategory] = useState<WatchlistCategoryKey>('customers')
+  const [newItemId, setNewItemId] = useState('')
+  const [newItemName, setNewItemName] = useState('')
+  const [isAddingWatchlistItem, setIsAddingWatchlistItem] = useState(false)
+  const [removingWatchlistItemKey, setRemovingWatchlistItemKey] = useState<string | null>(null)
   const [savedSystemsFilter, setSavedSystemsFilter] = useState('')
   const [pairPendingRemoval, setPairPendingRemoval] = useState<string | null>(null)
   const [results, setResults] = useState<SearchResultState>({
@@ -4078,61 +4245,52 @@ function App() {
     }
   }, [unseenVersions])
 
-  useEffect(() => {
+  // Shared by the initial load and by create/delete handlers that need to refresh the list
+  // after mutating it.
+  const reloadWatchlists = useCallback(async (): Promise<Watchlist[] | null> => {
     if (!refreshToken) {
-      return
+      return null
     }
 
-    let isCancelled = false
+    setIsWatchlistsLoading(true)
+    setWatchlistsError(null)
 
-    async function loadWatchlists() {
-      setIsWatchlistsLoading(true)
-      setWatchlistsError(null)
-
-      try {
-        let accessToken = tokenRef.current
-        if (!accessToken) {
-          accessToken = await refreshAccessToken(refreshToken)
-          tokenRef.current = accessToken
-        }
-
-        let nextWatchlists: Watchlist[]
-        try {
-          nextWatchlists = await fetchWatchlists(accessToken)
-        } catch (error) {
-          const message = error instanceof Error ? error.message : ''
-          if (!isTokenExpiredError(message)) throw error
-
-          accessToken = await refreshAccessToken(refreshToken)
-          tokenRef.current = accessToken
-          nextWatchlists = await fetchWatchlists(accessToken)
-        }
-
-        if (!isCancelled) {
-          setWatchlists(
-            nextWatchlists.sort(
-              (a, b) =>
-                Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name),
-            ),
-          )
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setWatchlists([])
-          setWatchlistsError(
-            error instanceof Error ? error.message : 'Failed to load watchlists.',
-          )
-        }
-      } finally {
-        if (!isCancelled) setIsWatchlistsLoading(false)
+    try {
+      let accessToken = tokenRef.current
+      if (!accessToken) {
+        accessToken = await refreshAccessToken(refreshToken)
+        tokenRef.current = accessToken
       }
-    }
 
-    void loadWatchlists()
-    return () => {
-      isCancelled = true
+      let nextWatchlists: Watchlist[]
+      try {
+        nextWatchlists = await fetchWatchlists(accessToken)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (!isTokenExpiredError(message)) throw error
+
+        accessToken = await refreshAccessToken(refreshToken)
+        tokenRef.current = accessToken
+        nextWatchlists = await fetchWatchlists(accessToken)
+      }
+
+      const sorted = nextWatchlists.sort(
+        (a, b) => Number(b.isDefault) - Number(a.isDefault) || a.name.localeCompare(b.name),
+      )
+      setWatchlists(sorted)
+      return sorted
+    } catch (error) {
+      setWatchlists([])
+      setWatchlistsError(error instanceof Error ? error.message : 'Failed to load watchlists.')
+      return null
+    } finally {
+      setIsWatchlistsLoading(false)
     }
   }, [refreshToken])
+
+  useEffect(() => {
+    void reloadWatchlists()
+  }, [reloadWatchlists])
 
   // Concurrent callers join the pending request instead of each asking the API for its own token.
   const requestAccessToken = () => {
@@ -4160,6 +4318,212 @@ function App() {
     if (tokenRef.current && tokenRef.current !== failedToken) return tokenRef.current
     return requestAccessToken()
   }
+
+  useEffect(() => {
+    // The panel only reads watchlistDetail/watchlistDetailError once a watchlist is selected,
+    // so there's nothing to reset here.
+    if (!selectedWatchlistId || !refreshToken) {
+      return
+    }
+
+    let isCancelled = false
+
+    async function loadWatchlistDetail(watchlistId: string) {
+      setIsWatchlistDetailLoading(true)
+      setWatchlistDetailError(null)
+
+      try {
+        let accessToken = tokenRef.current
+        if (!accessToken) {
+          accessToken = await refreshAccessToken(refreshToken)
+          tokenRef.current = accessToken
+        }
+
+        let detail: WatchlistDetail
+        try {
+          detail = await fetchWatchlistDetail(accessToken, watchlistId)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : ''
+          if (!isTokenExpiredError(message)) throw error
+          accessToken = await refreshAccessToken(refreshToken)
+          tokenRef.current = accessToken
+          detail = await fetchWatchlistDetail(accessToken, watchlistId)
+        }
+        if (!isCancelled) setWatchlistDetail(detail)
+      } catch (error) {
+        if (!isCancelled) {
+          setWatchlistDetail(null)
+          setWatchlistDetailError(
+            error instanceof Error ? error.message : 'Failed to load watchlist.',
+          )
+        }
+      } finally {
+        if (!isCancelled) setIsWatchlistDetailLoading(false)
+      }
+    }
+
+    void loadWatchlistDetail(selectedWatchlistId)
+    return () => {
+      isCancelled = true
+    }
+  }, [selectedWatchlistId, refreshToken])
+
+  const handleSelectWatchlist = (watchlistId: string) => {
+    setSelectedWatchlistId(watchlistId)
+    setWatchlistItemsFilter('')
+    setWatchlistMutationError(null)
+  }
+
+  const handleCreateWatchlist = async () => {
+    const trimmedName = newWatchlistName.trim()
+    if (!trimmedName) return
+
+    setIsCreatingWatchlist(true)
+    setWatchlistMutationError(null)
+
+    const emptyBody: WatchlistRequestBody = { watchlist_name: trimmedName }
+    for (const category of WATCHLIST_CATEGORIES) {
+      emptyBody[category.bodyKey] = []
+    }
+
+    try {
+      let accessToken = await getAccessToken()
+      let created: { id: string; name: string }
+      try {
+        created = await createWatchlist(accessToken, emptyBody)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (!isTokenExpiredError(message)) throw error
+        accessToken = await renewAccessToken(accessToken)
+        created = await createWatchlist(accessToken, emptyBody)
+      }
+
+      await reloadWatchlists()
+      setNewWatchlistName('')
+      setSelectedWatchlistId(created.id)
+    } catch (error) {
+      setWatchlistMutationError(
+        error instanceof Error ? error.message : 'Failed to create watchlist.',
+      )
+    } finally {
+      setIsCreatingWatchlist(false)
+    }
+  }
+
+  const handleConfirmDeleteWatchlist = async () => {
+    if (!pendingWatchlistDelete) return
+    const watchlistId = pendingWatchlistDelete.id
+
+    setWatchlistMutationError(null)
+
+    try {
+      let accessToken = await getAccessToken()
+      try {
+        await deleteWatchlistApi(accessToken, watchlistId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (!isTokenExpiredError(message)) throw error
+        accessToken = await renewAccessToken(accessToken)
+        await deleteWatchlistApi(accessToken, watchlistId)
+      }
+
+      await reloadWatchlists()
+      if (selectedWatchlistId === watchlistId) {
+        setSelectedWatchlistId(null)
+      }
+      setPendingWatchlistDelete(null)
+    } catch (error) {
+      setWatchlistMutationError(
+        error instanceof Error ? error.message : 'Failed to delete watchlist.',
+      )
+    }
+  }
+
+  // The update API replaces the whole set of category arrays, so every add/remove sends the
+  // full next detail back rather than a single item.
+  const applyWatchlistUpdate = async (nextDetail: WatchlistDetail): Promise<boolean> => {
+    const body = buildWatchlistRequestBody(nextDetail)
+    try {
+      let accessToken = await getAccessToken()
+      try {
+        await updateWatchlist(accessToken, nextDetail.id, body)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        if (!isTokenExpiredError(message)) throw error
+        accessToken = await renewAccessToken(accessToken)
+        await updateWatchlist(accessToken, nextDetail.id, body)
+      }
+      setWatchlistDetail(nextDetail)
+      return true
+    } catch (error) {
+      setWatchlistMutationError(
+        error instanceof Error ? error.message : 'Failed to update watchlist.',
+      )
+      return false
+    }
+  }
+
+  const handleAddWatchlistItem = async () => {
+    if (!watchlistDetail) return
+    const trimmedId = newItemId.trim()
+    if (!trimmedId) return
+    const trimmedName = newItemName.trim()
+
+    setIsAddingWatchlistItem(true)
+    setWatchlistMutationError(null)
+
+    const existingItems = watchlistDetail[newItemCategory]
+    const nextItems = existingItems.some((item) => item.id === trimmedId)
+      ? existingItems
+      : [...existingItems, { id: trimmedId, name: trimmedName || trimmedId }]
+
+    const succeeded = await applyWatchlistUpdate({
+      ...watchlistDetail,
+      [newItemCategory]: nextItems,
+    })
+
+    if (succeeded) {
+      setNewItemId('')
+      setNewItemName('')
+    }
+    setIsAddingWatchlistItem(false)
+  }
+
+  const handleRemoveWatchlistItem = async (category: WatchlistCategoryKey, itemId: string) => {
+    if (!watchlistDetail) return
+
+    setRemovingWatchlistItemKey(`${category}:${itemId}`)
+    setWatchlistMutationError(null)
+
+    const nextItems = watchlistDetail[category].filter((item) => item.id !== itemId)
+    await applyWatchlistUpdate({ ...watchlistDetail, [category]: nextItems })
+
+    setRemovingWatchlistItemKey(null)
+  }
+
+  const filteredWatchlistCategories = useMemo(() => {
+    if (!watchlistDetail) return []
+    const needle = watchlistItemsFilter.trim().toLowerCase()
+    return WATCHLIST_CATEGORIES.map((category) => {
+      const items = watchlistDetail[category.key]
+      const filtered = needle
+        ? items.filter(
+            (item) =>
+              item.id.toLowerCase().includes(needle) ||
+              item.name.toLowerCase().includes(needle),
+          )
+        : items
+      return { category, items: filtered }
+    }).filter((entry) => entry.items.length > 0)
+  }, [watchlistDetail, watchlistItemsFilter])
+
+  const watchlistTotalItemCount = useMemo(
+    () =>
+      watchlistDetail
+        ? WATCHLIST_CATEGORIES.reduce((sum, category) => sum + watchlistDetail[category.key].length, 0)
+        : 0,
+    [watchlistDetail],
+  )
 
   useEffect(() => {
     const canonical = buildTabUrl(bootLocation.tab, bootLocation.metricsView)
@@ -5593,7 +5957,7 @@ function App() {
           <Container size="xl">
             <Stack gap="lg">
               <Tabs value={activeTab} onChange={handleTabChange}>
-                <Tabs.List>
+                <Tabs.List className="app-tabs-list">
                   <Tabs.Tab value="search" leftSection={<IconSearch size={16} />}>
                     Search
                   </Tabs.Tab>
@@ -5602,6 +5966,19 @@ function App() {
                   </Tabs.Tab>
                   <Tabs.Tab value="metrics" leftSection={<IconChartLine size={16} />}>
                     Metrics
+                  </Tabs.Tab>
+                  <span className="app-tabs-spacer" aria-hidden="true" />
+                  <Tabs.Tab value="watchlists" leftSection={<IconEye size={16} />}>
+                    <Indicator
+                      inline
+                      label="beta"
+                      size={14}
+                      color="blue"
+                      position="top-end"
+                      offset={-6}
+                    >
+                      Watchlists
+                    </Indicator>
                   </Tabs.Tab>
                 </Tabs.List>
 
@@ -6655,6 +7032,295 @@ function App() {
                         </div>
                       </div>
                     )}
+                  </Stack>
+                </Tabs.Panel>
+
+                <Tabs.Panel value="watchlists" pt="md">
+                  <Stack gap="lg">
+                    <div>
+                      <Title order={3}>Watchlists</Title>
+                      <Text size="sm" c="dimmed">
+                        Manage Active IQ watchlists and the customers, sites, groups, clusters,
+                        systems, partners, and sales reps they track.
+                      </Text>
+                    </div>
+
+                    {watchlistMutationError ? (
+                      <Alert
+                        color="red"
+                        withCloseButton
+                        onClose={() => setWatchlistMutationError(null)}
+                      >
+                        {watchlistMutationError}
+                      </Alert>
+                    ) : null}
+
+                    <div className="watchlists-layout">
+                      <Stack gap="sm" className="watchlists-sidebar">
+                        <Group gap="xs" wrap="nowrap">
+                          <TextInput
+                            placeholder="New watchlist name"
+                            value={newWatchlistName}
+                            onChange={(event) => setNewWatchlistName(event.currentTarget.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') void handleCreateWatchlist()
+                            }}
+                            style={{ flex: 1 }}
+                          />
+                          <ActionIcon
+                            size="lg"
+                            variant="filled"
+                            aria-label="Create watchlist"
+                            disabled={!newWatchlistName.trim() || isCreatingWatchlist}
+                            loading={isCreatingWatchlist}
+                            onClick={() => void handleCreateWatchlist()}
+                          >
+                            <IconPlus size={16} />
+                          </ActionIcon>
+                        </Group>
+
+                        {isWatchlistsLoading ? (
+                          <Group gap="xs" justify="center" py="md">
+                            <Loader size="xs" />
+                            <Text size="sm" c="dimmed">
+                              Loading watchlists...
+                            </Text>
+                          </Group>
+                        ) : watchlistsError ? (
+                          <Text size="sm" c="red">
+                            {watchlistsError}
+                          </Text>
+                        ) : watchlists.length === 0 ? (
+                          <Text size="sm" c="dimmed">
+                            No watchlists yet. Create one above.
+                          </Text>
+                        ) : (
+                          <Stack gap={2}>
+                            {watchlists.map((watchlist) => (
+                              <div key={watchlist.id} className="watchlist-row">
+                                <UnstyledButton
+                                  className="watchlist-select"
+                                  data-selected={
+                                    watchlist.id === selectedWatchlistId ? true : undefined
+                                  }
+                                  onClick={() => handleSelectWatchlist(watchlist.id)}
+                                >
+                                  <Text size="sm" truncate>
+                                    {watchlist.isDefault
+                                      ? `${watchlist.name} (default)`
+                                      : watchlist.name}
+                                  </Text>
+                                </UnstyledButton>
+                                <ActionIcon
+                                  size="lg"
+                                  variant="subtle"
+                                  color="red"
+                                  aria-label={`Delete watchlist ${watchlist.name}`}
+                                  onClick={() => setPendingWatchlistDelete(watchlist)}
+                                >
+                                  <IconTrash size={16} />
+                                </ActionIcon>
+                              </div>
+                            ))}
+                          </Stack>
+                        )}
+                      </Stack>
+
+                      <div className="watchlists-main">
+                        {!selectedWatchlistId ? (
+                          <SearchEmptyState
+                            title="No watchlist selected"
+                            description="Select a watchlist on the left, or create one, to view and manage its items."
+                          />
+                        ) : isWatchlistDetailLoading && !watchlistDetail ? (
+                          <Group gap="xs" justify="center" py="xl">
+                            <Loader size="sm" />
+                            <Text size="sm" c="dimmed">
+                              Loading watchlist...
+                            </Text>
+                          </Group>
+                        ) : watchlistDetailError ? (
+                          <Alert color="red">{watchlistDetailError}</Alert>
+                        ) : watchlistDetail ? (
+                          <Stack gap="md">
+                            <Group justify="space-between" align="flex-start" wrap="wrap">
+                              <div>
+                                <Title order={4}>{watchlistDetail.name}</Title>
+                                {watchlistDetail.owner || watchlistDetail.sharedStatus ? (
+                                  <Group gap="xs" mt={4}>
+                                    {watchlistDetail.owner ? (
+                                      <Badge variant="light" color="gray">
+                                        Owner: {watchlistDetail.owner}
+                                      </Badge>
+                                    ) : null}
+                                    {watchlistDetail.sharedStatus ? (
+                                      <Badge variant="light" color="gray">
+                                        {watchlistDetail.sharedStatus}
+                                      </Badge>
+                                    ) : null}
+                                  </Group>
+                                ) : null}
+                              </div>
+                              <TextInput
+                                placeholder="Filter items"
+                                leftSection={<IconSearch size={16} />}
+                                value={watchlistItemsFilter}
+                                onChange={(event) =>
+                                  setWatchlistItemsFilter(event.currentTarget.value)
+                                }
+                                radius="xl"
+                                style={{ width: 280 }}
+                                rightSection={
+                                  watchlistItemsFilter ? (
+                                    <ActionIcon
+                                      size="sm"
+                                      variant="subtle"
+                                      color="gray"
+                                      onClick={() => setWatchlistItemsFilter('')}
+                                    >
+                                      <IconX size={14} />
+                                    </ActionIcon>
+                                  ) : null
+                                }
+                              />
+                            </Group>
+
+                            <Paper withBorder radius="md" p="sm">
+                              <Group gap="xs" wrap="wrap" align="flex-end">
+                                <Select
+                                  label="Category"
+                                  data={WATCHLIST_CATEGORIES.map((category) => ({
+                                    value: category.key,
+                                    label: category.label,
+                                  }))}
+                                  value={newItemCategory}
+                                  onChange={(value) => {
+                                    if (value) setNewItemCategory(value as WatchlistCategoryKey)
+                                  }}
+                                  allowDeselect={false}
+                                  style={{ width: 160 }}
+                                />
+                                <TextInput
+                                  label="ID"
+                                  placeholder="Raw identifier"
+                                  value={newItemId}
+                                  onChange={(event) => setNewItemId(event.currentTarget.value)}
+                                  style={{ flex: 1, minWidth: 160 }}
+                                />
+                                <TextInput
+                                  label="Name (optional)"
+                                  value={newItemName}
+                                  onChange={(event) => setNewItemName(event.currentTarget.value)}
+                                  style={{ flex: 1, minWidth: 160 }}
+                                />
+                                <Button
+                                  leftSection={<IconPlus size={16} />}
+                                  disabled={!newItemId.trim() || isAddingWatchlistItem}
+                                  loading={isAddingWatchlistItem}
+                                  onClick={() => void handleAddWatchlistItem()}
+                                >
+                                  Add
+                                </Button>
+                              </Group>
+                            </Paper>
+
+                            {watchlistTotalItemCount === 0 ? (
+                              <SearchEmptyState
+                                title="This watchlist is empty"
+                                description="Add a customer, site, group, cluster, system, partner, or sales rep above."
+                              />
+                            ) : filteredWatchlistCategories.length === 0 ? (
+                              <SearchEmptyState
+                                title="No items match"
+                                description="Clear the filter to see every item in this watchlist."
+                                actionLabel="Clear filter"
+                                actionIcon={<IconX size={16} />}
+                                onAction={() => setWatchlistItemsFilter('')}
+                              />
+                            ) : (
+                              <Accordion
+                                multiple
+                                defaultValue={WATCHLIST_CATEGORIES.map((category) => category.key)}
+                              >
+                                {filteredWatchlistCategories.map(({ category, items }) => (
+                                  <Accordion.Item key={category.key} value={category.key}>
+                                    <Accordion.Control>
+                                      {category.label} ({items.length})
+                                    </Accordion.Control>
+                                    <Accordion.Panel>
+                                      <Stack gap={4}>
+                                        {items.map((item) => {
+                                          const itemKey = `${category.key}:${item.id}`
+                                          return (
+                                            <Group
+                                              key={itemKey}
+                                              justify="space-between"
+                                              wrap="nowrap"
+                                              gap="xs"
+                                            >
+                                              <div style={{ minWidth: 0 }}>
+                                                <Text size="sm" truncate>
+                                                  {item.name}
+                                                </Text>
+                                                {item.name !== item.id ? (
+                                                  <Text size="xs" c="dimmed" truncate>
+                                                    {item.id}
+                                                  </Text>
+                                                ) : null}
+                                              </div>
+                                              <ActionIcon
+                                                size="sm"
+                                                variant="subtle"
+                                                color="red"
+                                                aria-label={`Remove ${item.name} from watchlist`}
+                                                loading={removingWatchlistItemKey === itemKey}
+                                                onClick={() =>
+                                                  void handleRemoveWatchlistItem(
+                                                    category.key,
+                                                    item.id,
+                                                  )
+                                                }
+                                              >
+                                                <IconTrash size={16} />
+                                              </ActionIcon>
+                                            </Group>
+                                          )
+                                        })}
+                                      </Stack>
+                                    </Accordion.Panel>
+                                  </Accordion.Item>
+                                ))}
+                              </Accordion>
+                            )}
+                          </Stack>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <Modal
+                      opened={pendingWatchlistDelete !== null}
+                      onClose={() => setPendingWatchlistDelete(null)}
+                      title="Delete watchlist?"
+                      centered
+                    >
+                      <Stack>
+                        <Text size="sm">
+                          “{pendingWatchlistDelete?.name}” will be removed from Active IQ. This
+                          cannot be undone.
+                        </Text>
+                        <Group justify="flex-end">
+                          <Button
+                            variant="default"
+                            onClick={() => setPendingWatchlistDelete(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button color="red" onClick={() => void handleConfirmDeleteWatchlist()}>
+                            Delete watchlist
+                          </Button>
+                        </Group>
+                      </Stack>
+                    </Modal>
                   </Stack>
                 </Tabs.Panel>
               </Tabs>

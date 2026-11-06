@@ -265,3 +265,57 @@
     overflow: visible;
   }
 }
+
+/* The list is a flex row. A growing spacer after Metrics pins Watchlists to the far end
+   and draws the divider in the gap, so the tab does not sit against Metrics. */
+.app-tabs-list {
+  width: 100%;
+}
+
+.app-tabs-spacer {
+  flex: 1 0 0;
+  align-self: center;
+  height: 1.15rem;
+  margin-inline: var(--mantine-spacing-sm);
+  border-inline-end: 1px solid var(--tab-border-color, var(--mantine-color-default-border));
+}
+
+/* Watchlists manager: the list stays on the left and the selected watchlist fills the
+   rest. Stack only when the viewport cannot hold both. Unlike the metrics workspace this
+   has no charts to keep onscreen, so it stays in normal document flow. */
+.watchlists-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 18rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--mantine-spacing-md);
+}
+
+@media (max-width: 47.99em) {
+  .watchlists-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.watchlist-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.watchlist-select {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: var(--mantine-radius-sm);
+}
+
+.watchlist-select:hover {
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+}
+
+.watchlist-select[data-selected] {
+  background: light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-5));
+}
