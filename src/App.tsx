@@ -90,7 +90,7 @@ import {
   IconX,
 } from '@tabler/icons-react'
 import { AreaChartWithLegend } from './AreaChartWithLegend'
-import { chartDataToCsv, downloadTextFile } from './chart-csv'
+import { capacityHistoryToCsv, chartDataToCsv, downloadTextFile } from './chart-csv'
 import { CHART_LOADING_LEGEND_HEIGHT } from './chart-legend'
 import {
   deleteMetricsPreset,
@@ -2863,9 +2863,29 @@ function CapacityHistoryChart({
 }) {
   const data = useMemo(() => buildConsolidatedMonthlyCapacity(nodes), [nodes])
 
+  const handleDownload = () => {
+    downloadTextFile('12-month capacity history.csv', capacityHistoryToCsv(data))
+  }
+
   return (
     <Stack gap="xs">
-      <Text fw={500} size="sm">12-month capacity history</Text>
+      <Group justify="space-between" align="center" wrap="nowrap">
+        <Text fw={500} size="sm">12-month capacity history</Text>
+        <Tooltip label="Download CSV">
+          <span style={{ display: 'inline-flex' }}>
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              size="sm"
+              aria-label="Download 12-month capacity history as CSV"
+              disabled={isLoading || data.length === 0}
+              onClick={handleDownload}
+            >
+              <IconDownload size={16} />
+            </ActionIcon>
+          </span>
+        </Tooltip>
+      </Group>
       {isLoading ? (
         <Skeleton h={220 + CHART_LOADING_LEGEND_HEIGHT} />
       ) : data.length > 0 ? (

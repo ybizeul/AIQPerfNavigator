@@ -43,6 +43,24 @@ export function csvDownloadBlob(contents: string): Blob {
   return new Blob([UTF8_BOM, contents], { type: 'text/csv;charset=utf-8' })
 }
 
+// The capacity chart plots the last 12 months in TiB. The file is that same
+// series: one row per month, with the unit in the header.
+type CapacityHistoryRow = {
+  month: string
+  Used: number
+  Usable: number
+}
+
+export function capacityHistoryToCsv(rows: readonly CapacityHistoryRow[]): string {
+  const header = ['month', 'Used (TiB)', 'Usable (TiB)'].map(escapeCsvField).join(',')
+  const body = rows.map((row) =>
+    [row.month, formatCsvValue(row.Used), formatCsvValue(row.Usable)]
+      .map(escapeCsvField)
+      .join(','),
+  )
+  return [header, ...body].join('\n')
+}
+
 function formatCsvValue(value: string | number | undefined): string {
   if (typeof value !== 'number' && typeof value !== 'string') return ''
   return String(value)

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { chartDataToCsv, csvDownloadBlob } from './chart-csv'
+import { capacityHistoryToCsv, chartDataToCsv, csvDownloadBlob } from './chart-csv'
 
 const SIX_AM = Date.parse('2026-07-12T06:00:00.000Z')
 const SEVEN_AM = Date.parse('2026-07-12T07:00:00.000Z')
@@ -113,6 +113,19 @@ describe('chartDataToCsv', () => {
 
     expect(csv).toBe(
       ['timestamp,CPU Utilization', '2026-07-12T06:00:00.000Z,0'].join('\n'),
+    )
+  })
+})
+
+describe('capacityHistoryToCsv', () => {
+  test('writes one row per month with used and usable in TiB', () => {
+    const csv = capacityHistoryToCsv([
+      { month: '2025-12', Used: 10.5, Usable: 20 },
+      { month: '2026-01', Used: 0, Usable: 21.25 },
+    ])
+
+    expect(csv).toBe(
+      ['month,Used (TiB),Usable (TiB)', '2025-12,10.5,20', '2026-01,0,21.25'].join('\n'),
     )
   })
 })
